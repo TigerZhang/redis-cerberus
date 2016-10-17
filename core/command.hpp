@@ -16,8 +16,11 @@ namespace cerb {
 
     class Command {
     public:
+        typedef enum { UNKOWN_COMMAND, DUMP_COMMAND, RESTORE_COMMAND } CommandType;
         std::shared_ptr<Buffer> buffer;
         util::sref<CommandGroup> const group;
+        std::pair<Buffer::iterator, Buffer::iterator> command_name_pos;
+        std::pair<Buffer::iterator, Buffer::iterator> command_key_pos;
 
         virtual ~Command() = default;
 
@@ -29,16 +32,21 @@ namespace cerb {
         Command(Buffer b, util::sref<CommandGroup> g)
             : buffer(new Buffer(std::move(b)))
             , group(g)
+        , handle_response(nullptr)
         {}
 
         explicit Command(util::sref<CommandGroup> g)
             : buffer(new Buffer)
             , group(g)
+        , handle_response(nullptr)
         {}
 
         Command(Command const&) = delete;
 
         static void allow_write_commands();
+
+        std::function<void (Command* command, Server* server, void* context)>
+                handle_response;
     };
 
     class DataCommand
@@ -46,11 +54,17 @@ namespace cerb {
     {
     public:
         DataCommand(Buffer b, util::sref<CommandGroup> g)
-            : Command(std::move(b), g)
+            : Command(std::move(b), g),
+              origin_command(nullptr),
+              origin_server(nullptr),
+              commandType(Command::UNKOWN_COMMAND)
         {}
 
         explicit DataCommand(util::sref<CommandGroup> g)
-            : Command(g)
+            : Command(g),
+              origin_command(nullptr),
+              origin_server(nullptr),
+              commandType(Command::UNKOWN_COMMAND)
         {}
 
         Time sent_time;
@@ -60,6 +74,11 @@ namespace cerb {
         {
             return resp_time - sent_time;
         }
+
+        DataCommand* origin_command; // for promote command. FIXME: should be shared_ptr?
+        Server* origin_server; // FIXME: should be shared_ptr?
+
+        Command::CommandType commandType;
     };
 
     class CommandGroup {
@@ -85,6 +104,15 @@ namespace cerb {
         virtual int total_buffer_size() const = 0;
         virtual void command_responsed() = 0;
         virtual void collect_stats(Proxy*) const {}
+    };
+
+    class OneSlotCommand
+            : public DataCommand
+    {
+        slot const key_slot;
+    public:
+        OneSlotCommand(Buffer b, util::sref<CommandGroup> g, slot ks);
+        Server* select_server(Proxy* proxy);
     };
 
     void split_client_command(Buffer& buffer, util::sref<Client> cli);

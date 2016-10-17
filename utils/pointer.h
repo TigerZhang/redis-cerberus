@@ -87,6 +87,10 @@ namespace util {
             return _ptr;
         }
 
+        pointer get() const {
+            return _ptr;
+        }
+
         util::id id() const
         {
             return util::id(_ptr);

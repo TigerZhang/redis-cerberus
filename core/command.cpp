@@ -34,24 +34,6 @@ namespace {
         return svr;
     }
 
-    class OneSlotCommand
-        : public DataCommand
-    {
-        slot const key_slot;
-    public:
-        OneSlotCommand(Buffer b, util::sref<CommandGroup> g, slot ks)
-            : DataCommand(std::move(b), g)
-            , key_slot(ks)
-        {
-            LOG(DEBUG) << "-Keyslot = " << this->key_slot;
-        }
-
-        Server* select_server(Proxy* proxy)
-        {
-            return ::select_server_for(proxy, this, this->key_slot);
-        }
-    };
-
     class MultiStepsCommand
         : public DataCommand
     {
@@ -979,13 +961,17 @@ namespace {
 
         static void on_string_nop(ClientCommandSplitter&, Iterator, Iterator) {}
 
-        static void on_command_head(ClientCommandSplitter& s, Iterator begin, Iterator end)
+        static void on_command_name(ClientCommandSplitter &s, Iterator begin, Iterator end)
         {
+            s.command_name_pos.first = begin;
+            s.command_name_pos.second = end;
             s.select_command_parser(begin, end);
         }
 
         static void on_command_key(ClientCommandSplitter& s, Iterator begin, Iterator end)
         {
+            s.command_key_pos.first = begin;
+            s.command_key_pos.second = end;
             s.last_command_is_bad = false;
             s._on_str = ClientCommandSplitter::on_string_nop;
             std::for_each(begin, end, [&](byte b) { s.slot_calc.next_byte(b); });
@@ -1001,6 +987,8 @@ namespace {
         bool last_command_is_bad;
         util::sptr<SpecialCommandParser> special_parser;
         util::sref<Client> client;
+        std::pair<Iterator, Iterator> command_name_pos;
+        std::pair<Iterator, Iterator> command_key_pos;
 
         void on_string(Iterator begin, Iterator end)
         {
@@ -1009,7 +997,7 @@ namespace {
 
         ClientCommandSplitter(Iterator i, util::sref<Client> cli)
             : BaseType(i)
-            , _on_str(ClientCommandSplitter::on_command_head)
+            , _on_str(ClientCommandSplitter::on_command_name)
             , last_command_begin(i)
             , last_command_is_bad(false)
             , special_parser(nullptr)
@@ -1056,13 +1044,16 @@ namespace {
 
         void on_split_point(Iterator i)
         {
-            this->_on_str = ClientCommandSplitter::on_command_head;
+            this->_on_str = ClientCommandSplitter::on_command_name;
             if (this->last_command_is_bad) {
                 this->client->push_command(util::mkptr(new DirectCommandGroup(
                     client, "-ERR Unknown command or command key not specified\r\n")));
             } else if (this->special_parser.nul()) {
-                this->client->push_command(util::mkptr(new SingleCommandGroup(
-                    client, Buffer(this->last_command_begin, i), this->slot_calc.get_slot())));
+                auto command_group = util::mkptr(new SingleCommandGroup(
+                        client, Buffer(this->last_command_begin, i), this->slot_calc.get_slot()));
+                command_group->command->command_name_pos = command_name_pos;
+                command_group->command->command_key_pos = command_key_pos;
+                this->client->push_command(std::move(command_group));
             } else {
                 this->client->push_command(this->special_parser->spawn_commands(this->client, i));
                 this->special_parser.reset();
@@ -1184,4 +1175,19 @@ void Command::allow_write_commands()
     for (auto const& c: SPECIAL_WRITE_COMMAND) {
         SPECIAL_RSP.insert(c);
     }
+}
+
+namespace cerb {
+    OneSlotCommand::OneSlotCommand(Buffer b, util::sref<CommandGroup> g, slot ks)
+            : DataCommand(std::move(b), g)
+            , key_slot(ks)
+    {
+        LOG(DEBUG) << "-Keyslot = " << this->key_slot;
+    }
+
+    Server* OneSlotCommand::select_server(Proxy* proxy)
+    {
+        return ::select_server_for(proxy, this, this->key_slot);
+    }
+
 }

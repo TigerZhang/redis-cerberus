@@ -9,20 +9,22 @@
 #include "connection.hpp"
 #include "utils/pointer.h"
 #include "utils/address.hpp"
+#include "response.hpp"
 
 namespace cerb {
 
     class Client;
     class DataCommand;
+    class SingleCommandGroup;
 
     class Server
         : public ProxyConnection
     {
         Proxy* _proxy;
         Buffer _buffer;
-        BufferSet _output_buffer_set;
+        BufferSet _outgoing_buffers;
 
-        std::vector<util::sref<DataCommand>> _commands;
+        std::vector<util::sref<DataCommand>> _incoming_commands;
         std::vector<util::sref<DataCommand>> _sent_commands;
 
         void _recv_from();
@@ -39,6 +41,9 @@ namespace cerb {
 
         static Server* _alloc_server(util::Address const& addr, Proxy* p);
     public:
+        typedef enum{CACHE, DB} Type;
+        Type type;
+
         util::Address addr;
         std::set<ProxyConnection*> attached_long_connections;
 
@@ -72,6 +77,10 @@ namespace cerb {
             this->attached_long_connections.erase(c);
             this->_proxy->decr_long_conn();
         }
+
+        bool need_try_to_promote_from_db(util::sref<DataCommand> command);
+
+        void try_to_promote(util::sref<DataCommand> command, Server *server);
     };
 
 }

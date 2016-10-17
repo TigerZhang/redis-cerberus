@@ -9,6 +9,8 @@ thread_local cerb::msize_t cerb_global::allocated_buffer(0);
 static std::mutex remote_addrs_mutex;
 static std::set<util::Address> remote_addrs;
 static bool cluster_ok = false;
+static util::Address cache("", 0);
+static util::Address db("", 0);
 
 void cerb_global::set_remotes(std::set<util::Address> remotes)
 {
@@ -16,7 +18,7 @@ void cerb_global::set_remotes(std::set<util::Address> remotes)
     ::remote_addrs = std::move(remotes);
 }
 
-std::set<util::Address> cerb_global::get_remotes()
+std::set<util::Address>& cerb_global::get_remotes()
 {
     std::lock_guard<std::mutex> _(::remote_addrs_mutex);
     return ::remote_addrs;
@@ -42,4 +44,23 @@ void cerb_global::set_cluster_ok(bool ok)
 bool cerb_global::cluster_ok()
 {
     return ::cluster_ok;
+}
+
+void cerb_global::set_cache(util::Address c)
+{
+    cache = c;
+}
+
+util::Address& cerb_global::get_cache()
+{
+    return cache;
+}
+
+void cerb_global::set_db(util::Address d)
+{
+    db = d;
+}
+
+util::Address& cerb_global::get_db() {
+    return db;
 }

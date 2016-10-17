@@ -94,6 +94,10 @@ namespace cerb {
             return this->_buffer.data();
         }
 
+        byte at(size_type pos) {
+            return this->_buffer.at(pos);
+        }
+
         int read(int fd);
         int write(int fd) const;
         void truncate_from_begin(iterator i);

@@ -35,9 +35,9 @@ void Server::on_events(int events)
     }
     this->_push_to_buffer_set();
     if (poll::event_is_write(events)) {
-        this->_output_buffer_set.writev(this->fd);
+        this->_outgoing_buffers.writev(this->fd);
     }
-    if (this->_output_buffer_set.empty()) {
+    if (this->_outgoing_buffers.empty()) {
         this->_proxy->set_conn_poll_ro(this);
     } else {
         this->_proxy->set_conn_poll_rw(this);
@@ -47,12 +47,12 @@ void Server::on_events(int events)
 void Server::_push_to_buffer_set()
 {
     auto now = Clock::now();
-    for (util::sref<DataCommand> c: this->_commands) {
+    for (util::sref<DataCommand> c: this->_incoming_commands) {
         this->_sent_commands.push_back(c);
-        this->_output_buffer_set.append(c->buffer);
+        this->_outgoing_buffers.append(c->buffer);
         c->sent_time = now;
     }
-    this->_commands.clear();
+    this->_incoming_commands.clear();
 }
 
 void Server::_recv_from()
@@ -79,8 +79,69 @@ void Server::_recv_from()
     for (util::sptr<Response>& rsp: responses) {
         util::sref<DataCommand> c = *cmd_it++;
         if (c.not_nul()) {
-            rsp->rsp_to(c, util::mkref(*this->_proxy));
-            c->resp_time = now;
+            if (c->origin_command) {
+                // it's internal cache to db command
+
+                // e.g.: when a key missed in cache,
+                // try to promote it from db (dump/restore)
+//                rsp->rsp_to(c->origin_command, util::mkref(*this->_proxy));
+//                c->resp_time = now;
+//                c->origin_command->resp_time = now;
+
+                // if the command is dump and it's forwarded command
+                // if (c->command_name = COMMAND_DUMP) {
+                // }
+                // send restore to original server
+                std::string respone_str = rsp->get_buffer().to_string();
+                // TODO: better implementation for checking if the response is "key not found"
+                if (c->commandType == Command::DUMP_COMMAND) {
+                    if (rsp->is_not_found()) {
+                        rsp->rsp_to(util::mkref(*c->origin_command),
+                                    util::mkref(*this->_proxy));
+                        c->origin_command->resp_time = now;
+                        c->resp_time = now;
+                    } else if (c->origin_server) {
+                        slot s = 0;
+                        const std::string RESTORE_CMD = "*4\r\n"
+                                "$7\r\nRESTORE\r\n"
+                                "${}\r\n{}\r\n"
+                                "$1\r\n0\r\n"
+                                "{}";
+
+                        // FIXME: better implementation of constructing a string
+                        std::string key(c->origin_command->command_key_pos.first,
+                            c->origin_command->command_key_pos.second);
+//                        for (Buffer::iterator i = c->command_key_pos.first; i <= c->command_key_pos.second; i++) {
+//                            key += static_cast<char>(*i);
+//                        };
+                        LOG(DEBUG) << "Try to restore to origin server. " << key;
+                        Buffer restore_command_buffer(
+                                fmt::format(RESTORE_CMD, key.size(), key, respone_str));
+                        OneSlotCommand* restore_command = new OneSlotCommand(
+                                std::move(restore_command_buffer),
+                                c->group, s);
+                        restore_command->origin_command = c.get();
+                        restore_command->commandType = Command::RESTORE_COMMAND;
+                        c->origin_server->push_client_command(util::mkref(*restore_command));
+                        _proxy->set_conn_poll_rw(c->origin_server);
+                    }
+                } else if (c->commandType == Command::RESTORE_COMMAND) {
+                    DataCommand* dump_command = c->origin_command;
+                    DataCommand* origin_command = dump_command->origin_command;
+                    dump_command->origin_server->push_client_command(util::mkref(*origin_command));
+                    _proxy->set_conn_poll_rw(dump_command->origin_server);
+                }
+
+            } else {
+                if (rsp->is_not_found() && need_try_to_promote_from_db(c)) {
+                    try_to_promote(c, this);
+//                Response& response_from_db =
+//                response_from_db.rsp_to(c, util::mkref(*this->_proxy));
+                } else {
+                    rsp->rsp_to(c, util::mkref(*this->_proxy));
+                    c->resp_time = now;
+                }
+            }
         }
     }
     this->_sent_commands.erase(this->_sent_commands.begin(), cmd_it);
@@ -88,14 +149,14 @@ void Server::_recv_from()
 
 void Server::push_client_command(util::sref<DataCommand> cmd)
 {
-    _commands.push_back(cmd);
+    _incoming_commands.push_back(cmd);
     cmd->group->client->add_peer(this);
 }
 
 void Server::pop_client(Client* cli)
 {
     util::erase_if(
-        this->_commands,
+        this->_incoming_commands,
         [&](util::sref<DataCommand> cmd)
         {
             return cmd->group->client.is(cli);
@@ -115,11 +176,12 @@ std::vector<util::sref<DataCommand>> Server::deliver_commands()
         {
             return cmd.nul();
         });
-    _commands.insert(_commands.end(), _sent_commands.begin(),
+    _incoming_commands.insert(_incoming_commands.end(), _sent_commands.begin(),
                      _sent_commands.end());
-    return std::move(_commands);
+    return std::move(_incoming_commands);
 }
 
+// TODO: using smart pointer
 static thread_local std::map<util::Address, Server*> servers_map;
 static thread_local std::vector<Server*> servers_pool;
 
@@ -148,12 +210,12 @@ void Server::close_conn()
         LOG(INFO) << "Close " << this->str();
         this->close();
         this->_buffer.clear();
-        this->_output_buffer_set.clear();
+        this->_outgoing_buffers.clear();
 
-        for (util::sref<DataCommand> c: this->_commands) {
+        for (util::sref<DataCommand> c: this->_incoming_commands) {
             this->_proxy->retry_move_ask_command_later(c);
         }
-        this->_commands.clear();
+        this->_incoming_commands.clear();
 
         for (util::sref<DataCommand> c: this->_sent_commands) {
             if (c.nul()) {
@@ -238,4 +300,48 @@ void Server::send_readonly_for_each_conn()
             flush_string(fd, READONLY_CMD);
             cmds.push_back(util::sref<DataCommand>(nullptr));
         };
+}
+
+bool Server::need_try_to_promote_from_db(util::sref<DataCommand> command) {
+    if (this->type == Type::DB) {
+        return false;
+    }
+
+//    command->command_name_pos
+    LOG(DEBUG) << "command name pos begin: "
+               << *command->command_name_pos.first;
+    if (*command->command_name_pos.first == 'g') {
+        if (*(command->command_name_pos.first+1) == 'e') {
+            if (*(command->command_name_pos.first+2) == 't') {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+const std::string DUMP_CMD = "*2\r\n$4\r\nDUMP\r\n${}\r\n{}\r\n";
+
+// FIXME: if there are multiple clients try to access the same key simultaneously,
+// there will be multiple promotion issued.
+// TODO: it's better to make sure the promotion just happened one time.
+void Server::try_to_promote(util::sref<DataCommand> command, Server *server) {
+    Server* db = _proxy->get_db();
+
+    std::string key(command->command_key_pos.first,
+                  command->command_key_pos.second);
+    LOG(DEBUG) << "Try to promote " << key;
+
+    Buffer dump_command_buffer(fmt::format(DUMP_CMD, key.size(), key));
+    if (db) {
+        slot s = 0;
+        OneSlotCommand* dump_command =new OneSlotCommand(
+                std::move(dump_command_buffer),
+                command->group, s);
+        dump_command->origin_command = command.get();
+        dump_command->origin_server = server;
+        dump_command->commandType = Command::DUMP_COMMAND;
+        db->push_client_command(util::mkref(*dump_command));
+        _proxy->set_conn_poll_rw(db);
+    }
 }

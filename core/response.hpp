@@ -20,6 +20,7 @@ namespace cerb {
         virtual void rsp_to(util::sref<DataCommand> c, util::sref<Proxy> p) = 0;
         virtual Buffer const& get_buffer() const = 0;
         virtual bool server_moved() const { return false; }
+        virtual bool is_not_found() const { return false; }
 
         static std::string const NIL_STR;
         static Buffer const NIL;

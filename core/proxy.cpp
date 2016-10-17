@@ -93,7 +93,8 @@ void SlotsMapUpdater::on_events(int events)
 void SlotsMapUpdater::_notify_updated()
 {
     this->close();
-    if (!this->_proxy_already_updated) {
+//    if (!this->_proxy_already_updated) {
+    {
         this->_proxy->notify_slot_map_updated(this->get_nodes(), this->_remotes,
                                               this->_covered_slots.size());
     }
@@ -216,7 +217,7 @@ void Proxy::notify_slot_map_updated(std::vector<RedisNode> const& nodes,
 {
     if (covered_slots < CLUSTER_SLOT_COUNT) {
         LOG(INFO) << fmt::format("Discard result because only {} slots covered", covered_slots);
-        return this->_update_slot_map_failed();
+//        return this->_update_slot_map_failed();
     }
     this->_set_slot_map(nodes, remotes);
     this->_move_closed_slot_updaters();
@@ -305,21 +306,42 @@ void Proxy::handle_events(poll::pevent events[], int nfds)
         c->after_events(active_conns);
     }
     this->_finished_slot_updaters.clear();
-    if (this->_should_update_slot_map()) {
-        LOG(DEBUG) << "Should update slot map";
-        this->_retrieve_slot_map();
+    if (_server_map.get_by_slot(0) == nullptr) {
+        _server_map.set_by_slot(
+                0,
+                Server::get_server(cerb_global::get_cache(), this));
+    }
+    _server_map.get_by_slot(0)->type = Server::Type::CACHE;
+
+    if (_server_map.get_by_slot(1) == nullptr) {
+        _server_map.set_by_slot(
+                1,
+                Server::get_server(cerb_global::get_db(), this));
+    }
+    _server_map.get_by_slot(1)->type = Server::Type::DB;
+
+//    if (this->_should_update_slot_map()) {
+//        LOG(DEBUG) << "Should update slot map";
+//        this->_retrieve_slot_map();
         /* do it again after try updating slot map
          * because some client may get CLUSTERDOWN message when no available remotes
          */
-        ::poll_ctl(this, std::move(this->_conn_poll_type));
-    }
+//        ::poll_ctl(this, std::move(this->_conn_poll_type));
+//    }
     LOG(DEBUG) << "*poll done";
 }
 
 Server* Proxy::get_server_by_slot(slot key_slot)
 {
-    Server* s = _server_map.get_by_slot(key_slot);
+//    Server* s = _server_map.get_by_slot(key_slot);
+    key_slot = key_slot;
+    Server *s = _server_map.get_by_slot(0);
     return (s == nullptr || s->closed()) ? nullptr : s;
+}
+
+Server* Proxy::get_db()
+{
+    return _server_map.get_by_slot(1);
 }
 
 void Proxy::new_client(int client_fd)

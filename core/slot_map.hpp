@@ -80,6 +80,11 @@ namespace cerb {
             return _servers[s];
         }
 
+        void set_by_slot(slot s, Server *server)
+        {
+            _servers[s] = server;
+        }
+
         void replace_map(std::vector<RedisNode> const& nodes, Proxy* proxy);
         void clear();
         Server* random_addr() const;

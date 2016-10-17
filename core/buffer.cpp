@@ -80,6 +80,7 @@ void Buffer::append_from(const_iterator first, const_iterator last)
     _buffer.insert(_buffer.end(), first, last);
 }
 
+// FIXME: can we avoid memory copying when constructing a string from a buffer
 std::string Buffer::to_string() const
 {
     return std::string(reinterpret_cast<char const*>(_buffer.data()), size());

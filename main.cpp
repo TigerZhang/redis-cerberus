@@ -131,6 +131,18 @@ namespace {
                             " use `SETREMOTES <host> <port>' in a redis-cli prompt";
         }
 
+        std::string cache_addr = "127.0.0.1:6379";
+        if (config.contains("cache")) {
+            cache_addr = config.get("cache");
+        }
+        cerb_global::set_cache(util::Address::from_host_port(cache_addr));
+
+        std::string db_addr = "127.0.0.1:6380";
+        if (config.contains("db")) {
+            db_addr = config.get("db");
+        }
+        cerb_global::set_db(util::Address::from_host_port(db_addr));
+
         for (int i = 0; i < thread_count; ++i) {
             cerb_global::all_threads.push_back(cerb::ListenThread(bind_port));
         }

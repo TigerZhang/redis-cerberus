@@ -34,6 +34,10 @@ namespace {
         {
             return rsp;
         }
+
+        bool is_not_found() const {
+            return rsp.same_as_string("$-1\r\n");
+        }
     };
 
     class RetryMovedAskResponse
