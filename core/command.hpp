@@ -98,7 +98,7 @@ namespace cerb {
         }
 
         virtual void deliver_client(Proxy*) {}
-        virtual bool wait_remote() const = 0;
+        virtual bool should_send_to_upstream_server_and_wait_response() const = 0;
         virtual void select_server_and_push_command_to_it(Proxy *proxy) = 0;
         virtual void append_buffer_to(BufferSet& b) = 0;
         virtual int total_buffer_size() const = 0;

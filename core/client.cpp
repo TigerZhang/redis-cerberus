@@ -153,7 +153,7 @@ void Client::_process()
             return this->close();
         }
 
-        if (g->wait_remote()) {
+        if (g->should_send_to_upstream_server_and_wait_response()) {
             ++this->_awaiting_count;
             g->select_server_and_push_command_to_it(this->_proxy);
         }

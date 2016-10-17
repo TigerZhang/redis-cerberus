@@ -91,7 +91,7 @@ namespace {
             : DirectCommandGroup(client, Buffer(r))
         {}
 
-        bool wait_remote() const
+        bool should_send_to_upstream_server_and_wait_response() const
         {
             return false;
         }
@@ -124,7 +124,7 @@ namespace {
         Time const creation;
         bool complete;
 
-        bool wait_remote() const
+        bool should_send_to_upstream_server_and_wait_response() const
         {
             return true;
         }
@@ -262,7 +262,7 @@ namespace {
             return true;
         }
 
-        bool wait_remote() const
+        bool should_send_to_upstream_server_and_wait_response() const
         {
             return false;
         }
