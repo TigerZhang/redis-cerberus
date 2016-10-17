@@ -22,7 +22,7 @@ std::string cerb::stats_all()
     Interval total_cmd_elapse(0);
     Interval total_remote_cost(0);
     for (auto const& thread: cerb_global::all_threads) {
-        util::sref<Proxy const> proxy(thread.get_proxy());
+        util::weak_pointer<Proxy const> proxy(thread.get_proxy());
         clients_counts.push_back(util::str(proxy->clients_count()));
         long_conns_counts.push_back(util::str(proxy->long_conns_count()));
         total_commands += proxy->total_cmd();

@@ -25,7 +25,7 @@ namespace {
             , error(e)
         {}
 
-        void rsp_to(util::sref<DataCommand> cmd, util::sref<Proxy>)
+        void rsp_to(util::weak_pointer<DataCommand> cmd, util::weak_pointer<Proxy>)
         {
             cmd->on_remote_responsed(std::move(this->rsp), error);
         }
@@ -45,7 +45,7 @@ namespace {
     {
         static Buffer const dump;
     public:
-        void rsp_to(util::sref<DataCommand> cmd, util::sref<Proxy> p)
+        void rsp_to(util::weak_pointer<DataCommand> cmd, util::weak_pointer<Proxy> p)
         {
             p->retry_move_ask_command_later(cmd);
         }
@@ -73,13 +73,13 @@ namespace {
 
         void _push_retry_rsp()
         {
-            this->responses.push_back(util::mkptr(new RetryMovedAskResponse));
+            this->responses.push_back(util::make_unique_ptr(new RetryMovedAskResponse));
         }
 
         void _push_normal_rsp(Iterator begin, Iterator end)
         {
-            this->responses.push_back(util::mkptr(
-                new NormalResponse(Buffer(begin, end), !this->_last_error.empty())));
+            this->responses.push_back(util::make_unique_ptr(
+                    new NormalResponse(Buffer(begin, end), !this->_last_error.empty())));
         }
 
         void _push_rsp(Iterator i)
@@ -96,7 +96,7 @@ namespace {
             this->_push_normal_rsp(this->_split_points.back(), i);
         }
     public:
-        std::vector<util::sptr<Response>> responses;
+        std::vector<util::unique_pointer<Response>> responses;
 
         explicit ServerResponseSplitter(Iterator i)
             : BaseType(i)
@@ -116,7 +116,7 @@ namespace {
 
 }
 
-std::vector<util::sptr<Response>> cerb::split_server_response(Buffer& buffer)
+std::vector<util::unique_pointer<Response>> cerb::split_server_response(Buffer& buffer)
 {
     ServerResponseSplitter r(msg::split_by(
         buffer.begin(), buffer.end(), ServerResponseSplitter(buffer.begin())));

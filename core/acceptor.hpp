@@ -9,9 +9,9 @@ namespace cerb {
     class Acceptor
         : public Connection
     {
-        util::sref<Proxy> const _proxy;
+        util::weak_pointer<Proxy> const _proxy;
     public:
-        Acceptor(util::sref<Proxy> p, int listen_port);
+        Acceptor(util::weak_pointer<Proxy> p, int listen_port);
 
         void on_events(int);
         void on_error() {}

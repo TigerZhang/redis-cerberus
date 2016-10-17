@@ -24,8 +24,8 @@ namespace cerb {
         Buffer _buffer;
         BufferSet _outgoing_buffers;
 
-        std::vector<util::sref<DataCommand>> _incoming_commands;
-        std::vector<util::sref<DataCommand>> _sent_commands;
+        std::vector<util::weak_pointer<DataCommand>> _incoming_commands;
+        std::vector<util::weak_pointer<DataCommand>> _sent_commands;
 
         void _recv_from();
         void _reconnect(util::Address const& addr, Proxy* p);
@@ -62,9 +62,9 @@ namespace cerb {
         }
 
         void close_conn();
-        void push_client_command(util::sref<DataCommand> cmd);
+        void push_client_command(util::weak_pointer<DataCommand> cmd);
         void pop_client(Client* cli);
-        std::vector<util::sref<DataCommand>> deliver_commands();
+        std::vector<util::weak_pointer<DataCommand>> deliver_commands();
 
         void attach_long_connection(ProxyConnection* c)
         {
@@ -78,9 +78,9 @@ namespace cerb {
             this->_proxy->decr_long_conn();
         }
 
-        bool need_try_to_promote_from_db(util::sref<DataCommand> command);
+        bool need_try_to_promote_from_db(util::weak_pointer<DataCommand> command);
 
-        void try_to_promote(util::sref<DataCommand> command, Server *server);
+        void try_to_promote(util::weak_pointer<DataCommand> command, Server *server);
     };
 
 }

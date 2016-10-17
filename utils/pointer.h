@@ -21,33 +21,33 @@ namespace util {
     };
 
     template <typename RawType>
-    struct sref {
+    struct weak_pointer {
         typedef RawType value_type;
         typedef typename std::unique_ptr<RawType>::pointer pointer;
 
-        explicit sref(pointer ptr)
+        explicit weak_pointer(pointer ptr)
             : _ptr(ptr)
         {}
 
         template <typename ConvertableType>
-        sref(sref<ConvertableType> rhs)
+        weak_pointer(weak_pointer<ConvertableType> rhs)
             : _ptr(rhs.template convert<RawType>()._ptr)
         {}
 
         template <typename ConvertableType>
-        sref operator=(sref<ConvertableType> rhs)
+        weak_pointer operator=(weak_pointer<ConvertableType> rhs)
         {
             _ptr = rhs.template convert<RawType>()._ptr;
             return *this;
         }
 
         template <typename TargetType>
-        sref<TargetType> convert() const
+        weak_pointer<TargetType> convert() const
         {
-            return sref<TargetType>(_ptr);
+            return weak_pointer<TargetType>(_ptr);
         }
 
-        bool operator==(sref rhs) const
+        bool operator==(weak_pointer rhs) const
         {
             return *_ptr == *rhs._ptr;
         }
@@ -57,17 +57,17 @@ namespace util {
             return _ptr == rhs;
         }
 
-        bool is(sref rhs) const
+        bool is(weak_pointer rhs) const
         {
             return _ptr == rhs._ptr;
         }
 
-        bool operator!=(sref rhs) const
+        bool operator!=(weak_pointer rhs) const
         {
             return *_ptr != *rhs._ptr;
         }
 
-        bool operator<(sref rhs) const
+        bool operator<(weak_pointer rhs) const
         {
             return *_ptr < *rhs._ptr;
         }
@@ -103,11 +103,11 @@ namespace util {
     private:
         pointer _ptr;
 
-        explicit sref(int) = delete;
+        explicit weak_pointer(int) = delete;
     };
 
     template <typename RawType>
-    struct sptr
+    struct unique_pointer
         : std::unique_ptr<RawType>
     {
         typedef RawType value_type;
@@ -115,25 +115,25 @@ namespace util {
         typedef typename base_type::pointer pointer;
         typedef typename base_type::deleter_type deleter_type;
 
-        explicit sptr(pointer p)
+        explicit unique_pointer(pointer p)
             : base_type(p)
         {}
 
         template <typename ConvertableType>
-        sptr(sptr<ConvertableType>&& rhs)
+        unique_pointer(unique_pointer<ConvertableType>&& rhs)
             : base_type(std::move(rhs))
         {}
 
         template <typename ConvertableType>
-        sptr& operator=(sptr<ConvertableType>&& rhs)
+        unique_pointer& operator=(unique_pointer<ConvertableType>&& rhs)
         {
             base_type::operator=(std::move(rhs));
             return *this;
         }
 
-        sref<RawType> operator*() const
+        weak_pointer<RawType> operator*() const
         {
-            return sref<RawType>(base_type::get());
+            return weak_pointer<RawType>(base_type::get());
         }
 
         util::id id() const
@@ -156,21 +156,21 @@ namespace util {
             return !nul();
         }
 
-        explicit sptr(int) = delete;
+        explicit unique_pointer(int) = delete;
         pointer get() const = delete;
         explicit operator bool() const = delete;
     };
 
     template <typename RawType>
-    sptr<RawType> mkptr(RawType* ptr)
+    unique_pointer<RawType> make_unique_ptr(RawType *ptr)
     {
-        return sptr<RawType>(ptr);
+        return unique_pointer<RawType>(ptr);
     }
 
     template <typename RawType>
-    sref<RawType> mkref(RawType& obj)
+    weak_pointer<RawType> make_weak_pointer(RawType &obj)
     {
-        return sref<RawType>(&obj);
+        return weak_pointer<RawType>(&obj);
     }
 
 }

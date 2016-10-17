@@ -41,7 +41,7 @@ void SlotsMapUpdater::_send_cmd()
 void SlotsMapUpdater::_recv_rsp()
 {
     _rsp.read(this->fd);
-    std::vector<util::sptr<Response>> rsp(split_server_response(_rsp));
+    std::vector<util::unique_pointer<Response>> rsp(split_server_response(_rsp));
     if (rsp.size() == 0) {
         return this->_await_data();
     }
@@ -137,8 +137,8 @@ void Proxy::_set_slot_map(std::vector<RedisNode> const& map,
     }
 
     std::set<Server*> svrs;
-    std::vector<util::sref<DataCommand>> retrying(std::move(this->_retrying_commands));
-    for (util::sref<DataCommand> cmd: retrying) {
+    std::vector<util::weak_pointer<DataCommand>> retrying(std::move(this->_retrying_commands));
+    for (util::weak_pointer<DataCommand> cmd: retrying) {
         Server* s = cmd->select_server(this);
         if (s == nullptr) {
             LOG(DEBUG) << "Select null server after slot map updated";
@@ -155,7 +155,7 @@ void Proxy::_set_slot_map(std::vector<RedisNode> const& map,
 
 void Proxy::_update_slot_map_failed()
 {
-    for (util::sptr<SlotsMapUpdater> const& u: this->_slot_updaters) {
+    for (util::unique_pointer<SlotsMapUpdater> const& u: this->_slot_updaters) {
         if (!u->closed()) {
             return;
         }
@@ -164,9 +164,9 @@ void Proxy::_update_slot_map_failed()
 
     if (!cerb_global::cluster_req_full_cov() && !this->_slot_updaters.empty()) {
         LOG(DEBUG) << fmt::format("Doesn't request full coverage, try {} updaters", this->_slot_updaters.size());
-        util::sptr<SlotsMapUpdater> const& candidate_updater = *util::max_element(
+        util::unique_pointer<SlotsMapUpdater> const& candidate_updater = *util::max_element(
             this->_slot_updaters,
-            [](util::sptr<SlotsMapUpdater> const& u)
+            [](util::unique_pointer<SlotsMapUpdater> const& u)
             {
                 return u->covered_slots();
             });
@@ -183,8 +183,8 @@ void Proxy::_update_slot_map_failed()
     cerb_global::set_cluster_ok(false);
     LOG(DEBUG) << "Failed to retrieve slot map, discard all commands.";
     _server_map.clear();
-    std::vector<util::sref<DataCommand>> cmds(std::move(this->_retrying_commands));
-    for (util::sref<DataCommand> c: cmds) {
+    std::vector<util::weak_pointer<DataCommand>> cmds(std::move(this->_retrying_commands));
+    for (util::weak_pointer<DataCommand> c: cmds) {
         c->on_remote_responsed(Buffer("-CLUSTERDOWN The cluster is down\r\n"), true);
     }
     _slot_map_expired = false;
@@ -200,7 +200,7 @@ void Proxy::_retrieve_slot_map()
     for (util::Address const& addr: remotes) {
         try {
             this->_slot_updaters.push_back(
-                util::mkptr(new SlotsMapUpdater(addr, this)));
+                    util::make_unique_ptr(new SlotsMapUpdater(addr, this)));
         } catch (ConnectionRefused& e) {
             LOG(INFO) << "Disconnect " << addr.str() << " for " << e.what();
         } catch (UnknownHost& e) {
@@ -247,7 +247,7 @@ void Proxy::_move_closed_slot_updaters()
     this->_slot_updaters.clear();
 }
 
-void Proxy::retry_move_ask_command_later(util::sref<DataCommand> cmd)
+void Proxy::retry_move_ask_command_later(util::weak_pointer<DataCommand> cmd)
 {
     LOG(DEBUG) << "Retry later: " << cmd.id().str() << " for " << cmd->group->client->str();
     this->_retrying_commands.push_back(cmd);
@@ -355,7 +355,7 @@ void Proxy::pop_client(Client* cli)
     LOG(DEBUG) << "Pop " << cli->str();
     util::erase_if(
         this->_retrying_commands,
-        [cli](util::sref<DataCommand> cmd)
+        [cli](util::weak_pointer<DataCommand> cmd)
         {
             return cmd->group->client.is(cli);
         });

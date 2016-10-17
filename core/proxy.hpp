@@ -68,9 +68,9 @@ namespace cerb {
         int _long_conns_count;
 
         SlotMap _server_map;
-        std::vector<util::sptr<SlotsMapUpdater>> _slot_updaters;
-        std::vector<util::sptr<SlotsMapUpdater>> _finished_slot_updaters;
-        std::vector<util::sref<DataCommand>> _retrying_commands;
+        std::vector<util::unique_pointer<SlotsMapUpdater>> _slot_updaters;
+        std::vector<util::unique_pointer<SlotsMapUpdater>> _finished_slot_updaters;
+        std::vector<util::weak_pointer<DataCommand>> _retrying_commands;
         std::set<Connection*> _inactive_long_connections;
         Interval _total_cmd_elapse;
         Interval _total_remote_cost;
@@ -160,7 +160,7 @@ namespace cerb {
                                      std::set<util::Address> const& remotes,
                                      msize_t covered_slots);
         void update_slot_map();
-        void retry_move_ask_command_later(util::sref<DataCommand> cmd);
+        void retry_move_ask_command_later(util::weak_pointer<DataCommand> cmd);
         void inactivate_long_conn(Connection* conn);
         void handle_events(poll::pevent events[], int nfds);
         void new_client(int client_fd);

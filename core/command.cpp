@@ -27,10 +27,10 @@ namespace {
         Server* svr = proxy->get_server_by_slot(key_slot);
         if (svr == nullptr) {
             LOG(DEBUG) << "Cluster slot not covered " << key_slot;
-            proxy->retry_move_ask_command_later(util::mkref(*cmd));
+            proxy->retry_move_ask_command_later(util::make_weak_pointer(*cmd));
             return nullptr;
         }
-        svr->push_client_command(util::mkref(*cmd));
+        svr->push_client_command(util::make_weak_pointer(*cmd));
         return svr;
     }
 
@@ -41,7 +41,7 @@ namespace {
         slot current_key_slot;
         std::function<void(Buffer, bool)> on_rsp;
 
-        MultiStepsCommand(util::sref<CommandGroup> group, slot s,
+        MultiStepsCommand(util::weak_pointer<CommandGroup> group, slot s,
                           std::function<void(Buffer, bool)> r)
             : DataCommand(group)
             , current_key_slot(s)
@@ -66,7 +66,7 @@ namespace {
             : public Command
         {
         public:
-            DirectCommand(Buffer b, util::sref<CommandGroup> g)
+            DirectCommand(Buffer b, util::weak_pointer<CommandGroup> g)
                 : Command(std::move(b), g)
             {}
 
@@ -76,18 +76,18 @@ namespace {
             }
         };
     public:
-        util::sptr<DirectCommand> command;
+        util::unique_pointer<DirectCommand> command;
 
-        DirectCommandGroup(util::sref<Client> client, Buffer b)
+        DirectCommandGroup(util::weak_pointer<Client> client, Buffer b)
             : CommandGroup(client)
-            , command(new DirectCommand(std::move(b), util::mkref(*this)))
+            , command(new DirectCommand(std::move(b), util::make_weak_pointer(*this)))
         {}
 
-        DirectCommandGroup(util::sref<Client> client, char const* r)
+        DirectCommandGroup(util::weak_pointer<Client> client, char const* r)
             : DirectCommandGroup(client, Buffer(r))
         {}
 
-        DirectCommandGroup(util::sref<Client> client, std::string r)
+        DirectCommandGroup(util::weak_pointer<Client> client, std::string r)
             : DirectCommandGroup(client, Buffer(r))
         {}
 
@@ -96,7 +96,7 @@ namespace {
             return false;
         }
 
-        void select_remote(Proxy*) {}
+        void select_server_and_push_command_to_it(Proxy *) {}
 
         void append_buffer_to(BufferSet& b)
         {
@@ -115,7 +115,7 @@ namespace {
         : public CommandGroup
     {
     protected:
-        explicit StatsCommandGroup(util::sref<Client> cli)
+        explicit StatsCommandGroup(util::weak_pointer<Client> cli)
             : CommandGroup(cli)
             , creation(Clock::now())
             , complete(false)
@@ -142,16 +142,16 @@ namespace {
         : public StatsCommandGroup
     {
     public:
-        util::sptr<DataCommand> command;
+        util::unique_pointer<DataCommand> command;
 
-        explicit SingleCommandGroup(util::sref<Client> cli)
+        explicit SingleCommandGroup(util::weak_pointer<Client> cli)
             : StatsCommandGroup(cli)
             , command(nullptr)
         {}
 
-        SingleCommandGroup(util::sref<Client> cli, Buffer b, slot ks)
+        SingleCommandGroup(util::weak_pointer<Client> cli, Buffer b, slot ks)
             : StatsCommandGroup(cli)
-            , command(new OneSlotCommand(std::move(b), util::mkref(*this), ks))
+            , command(new OneSlotCommand(std::move(b), util::make_weak_pointer(*this), ks))
         {}
 
         void command_responsed()
@@ -170,7 +170,7 @@ namespace {
             return command->buffer->size();
         }
 
-        void select_remote(Proxy* proxy)
+        void select_server_and_push_command_to_it(Proxy *proxy)
         {
             command->select_server(proxy);
         }
@@ -186,16 +186,16 @@ namespace {
     {
     public:
         std::shared_ptr<Buffer> arr_payload;
-        std::vector<util::sptr<DataCommand>> commands;
+        std::vector<util::unique_pointer<DataCommand>> commands;
         int awaiting_count;
 
-        explicit MultipleCommandsGroup(util::sref<Client> c)
+        explicit MultipleCommandsGroup(util::weak_pointer<Client> c)
             : StatsCommandGroup(c)
             , arr_payload(new Buffer)
             , awaiting_count(0)
         {}
 
-        void append_command(util::sptr<DataCommand> c)
+        void append_command(util::unique_pointer<DataCommand> c)
         {
             awaiting_count += 1;
             commands.push_back(std::move(c));
@@ -228,7 +228,7 @@ namespace {
             return i;
         }
 
-        void select_remote(Proxy* proxy)
+        void select_server_and_push_command_to_it(Proxy *proxy)
         {
             for (auto& c: this->commands) {
                 c->select_server(proxy);
@@ -242,7 +242,7 @@ namespace {
             }
             return std::accumulate(
                 this->commands.begin(), this->commands.end(), Interval(0),
-                [](Interval a, util::sptr<DataCommand> const& c)
+                [](Interval a, util::unique_pointer<DataCommand> const& c)
                 {
                     return a + c->remote_cost();
                 }) / this->commands.size();
@@ -253,7 +253,7 @@ namespace {
         : public CommandGroup
     {
     public:
-        LongCommandGroup(util::sref<Client> client)
+        LongCommandGroup(util::weak_pointer<Client> client)
             : CommandGroup(client)
         {}
 
@@ -272,7 +272,7 @@ namespace {
             return 0;
         }
 
-        void select_remote(Proxy*) {}
+        void select_server_and_push_command_to_it(Proxy *) {}
         void append_buffer_to(BufferSet&) {}
         void command_responsed() {}
     };
@@ -295,8 +295,8 @@ namespace {
         virtual void on_str(Buffer::iterator begin, Buffer::iterator end) = 0;
         virtual ~SpecialCommandParser() {}
 
-        virtual util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator end) = 0;
+        virtual util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator end) = 0;
 
         SpecialCommandParser() = default;
         SpecialCommandParser(SpecialCommandParser const&) = delete;
@@ -309,13 +309,13 @@ namespace {
     public:
         PingCommandParser() = default;
 
-        util::sptr<CommandGroup> spawn_commands(util::sref<Client> c, Buffer::iterator)
+        util::unique_pointer<CommandGroup> spawn_commands(util::weak_pointer<Client> c, Buffer::iterator)
         {
             if (this->msg.empty()) {
-                return util::mkptr(new DirectCommandGroup(c, "+PONG\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(c, "+PONG\r\n"));
             }
-            return util::mkptr(new DirectCommandGroup(c, fmt::format(
-                            "${}\r\n{}\r\n", this->msg.size(), this->msg)));
+            return util::make_unique_ptr(new DirectCommandGroup(c, fmt::format(
+                    "${}\r\n{}\r\n", this->msg.size(), this->msg)));
         }
 
         void on_str(Buffer::iterator begin, Buffer::iterator end)
@@ -330,10 +330,10 @@ namespace {
     public:
         ProxyStatsCommandParser() = default;
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator)
         {
-            return util::mkptr(new DirectCommandGroup(c, stats_string()));
+            return util::make_unique_ptr(new DirectCommandGroup(c, stats_string()));
         }
 
         void on_str(Buffer::iterator, Buffer::iterator) {}
@@ -345,10 +345,10 @@ namespace {
     public:
         UpdateSlotMapCommandParser() = default;
 
-        util::sptr<CommandGroup> spawn_commands(util::sref<Client> c, Buffer::iterator)
+        util::unique_pointer<CommandGroup> spawn_commands(util::weak_pointer<Client> c, Buffer::iterator)
         {
             ::notify_each_thread_update_slot_map();
-            return util::mkptr(new DirectCommandGroup(c, RSP_OK_STR));
+            return util::make_unique_ptr(new DirectCommandGroup(c, RSP_OK_STR));
         }
 
         void on_str(Buffer::iterator, Buffer::iterator) {}
@@ -367,19 +367,19 @@ namespace {
             , bad(false)
         {}
 
-        util::sptr<CommandGroup> spawn_commands(util::sref<Client> c, Buffer::iterator)
+        util::unique_pointer<CommandGroup> spawn_commands(util::weak_pointer<Client> c, Buffer::iterator)
         {
             if (this->bad) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR invalid port number\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR invalid port number\r\n"));
             }
             if (this->remotes.empty() || !this->current_is_host) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong number of arguments for 'SETREMOTES' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong number of arguments for 'SETREMOTES' command\r\n"));
             }
             cerb_global::set_remotes(std::move(this->remotes));
             ::notify_each_thread_update_slot_map();
-            return util::mkptr(new DirectCommandGroup(c, RSP_OK_STR));
+            return util::make_unique_ptr(new DirectCommandGroup(c, RSP_OK_STR));
         }
 
         void on_str(Buffer::iterator begin, Buffer::iterator end)
@@ -406,9 +406,9 @@ namespace {
 
         virtual Buffer command_header() const = 0;
 
-        virtual util::sptr<MultipleCommandsGroup> makeGroup(util::sref<Client> c) const
+        virtual util::unique_pointer<MultipleCommandsGroup> makeGroup(util::weak_pointer<Client> c) const
         {
-            return util::mkptr(new MultipleCommandsGroup(c));
+            return util::make_unique_ptr(new MultipleCommandsGroup(c));
         }
     public:
         EachKeyCommandParser(Buffer::iterator arg_begin, std::string cmd)
@@ -427,19 +427,19 @@ namespace {
             this->keys_split_points.push_back(end + msg::LENGTH_OF_CR_LF);
         }
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator)
         {
             if (keys_slots.empty()) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong number of arguments for '" + this->command_name + "' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong number of arguments for '" + this->command_name + "' command\r\n"));
             }
-            util::sptr<MultipleCommandsGroup> g(this->makeGroup(c));
+            util::unique_pointer<MultipleCommandsGroup> g(this->makeGroup(c));
             for (unsigned i = 0; i < keys_slots.size(); ++i) {
                 Buffer b(command_header());
                 b.append_from(this->keys_split_points[i], this->keys_split_points[i + 1]);
-                g->append_command(util::mkptr(
-                    new OneSlotCommand(std::move(b), *g, this->keys_slots[i])));
+                g->append_command(util::make_unique_ptr(
+                        new OneSlotCommand(std::move(b), *g, this->keys_slots[i])));
             }
             return std::move(g);
         }
@@ -465,7 +465,7 @@ namespace {
             : public MultipleCommandsGroup
         {
         public:
-            explicit DelCommandGroup(util::sref<Client> c)
+            explicit DelCommandGroup(util::weak_pointer<Client> c)
                 : MultipleCommandsGroup(c)
             {}
 
@@ -485,9 +485,9 @@ namespace {
             }
         };
 
-        util::sptr<MultipleCommandsGroup> makeGroup(util::sref<Client> c) const
+        util::unique_pointer<MultipleCommandsGroup> makeGroup(util::weak_pointer<Client> c) const
         {
-            return util::mkptr(new DelCommandGroup(c));
+            return util::make_unique_ptr(new DelCommandGroup(c));
         }
 
         Buffer command_header() const
@@ -507,7 +507,7 @@ namespace {
             : public MultipleCommandsGroup
         {
         public:
-            explicit MSetCommandGroup(util::sref<Client> c)
+            explicit MSetCommandGroup(util::weak_pointer<Client> c)
                 : MultipleCommandsGroup(c)
             {}
 
@@ -545,19 +545,19 @@ namespace {
             this->kv_split_points.push_back(end + msg::LENGTH_OF_CR_LF);
         }
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator)
         {
             if (keys_slots.empty() || !current_is_key) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong number of arguments for 'mset' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong number of arguments for 'mset' command\r\n"));
             }
-            util::sptr<MSetCommandGroup> g(new MSetCommandGroup(c));
+            util::unique_pointer<MSetCommandGroup> g(new MSetCommandGroup(c));
             for (unsigned i = 0; i < keys_slots.size(); ++i) {
                 Buffer b("*3\r\n$3\r\nSET\r\n");
                 b.append_from(kv_split_points[i * 2], kv_split_points[i * 2 + 2]);
-                g->append_command(util::mkptr(new OneSlotCommand(
-                    std::move(b), *g, keys_slots[i])));
+                g->append_command(util::make_unique_ptr(new OneSlotCommand(
+                        std::move(b), *g, keys_slots[i])));
             }
             return std::move(g);
         }
@@ -575,7 +575,7 @@ namespace {
             slot new_key_slot;
         public:
             RenameCommand(Buffer old_key, Buffer new_key, slot old_key_slot,
-                          slot new_key_slot, util::sref<CommandGroup> group)
+                          slot new_key_slot, util::weak_pointer<CommandGroup> group)
                 : MultiStepsCommand(group, old_key_slot,
                                     [&](Buffer r, bool e)
                                     {
@@ -613,7 +613,7 @@ namespace {
                         }
                         this->rsp_set();
                     };
-                this->group->client->reactivate(util::mkref(*this));
+                this->group->client->reactivate(util::make_weak_pointer(*this));
             }
 
             void rsp_set()
@@ -627,7 +627,7 @@ namespace {
                         this->buffer->swap(Buffer(RSP_OK_STR));
                         this->responsed();
                     };
-                this->group->client->reactivate(util::mkref(*this));
+                this->group->client->reactivate(util::make_weak_pointer(*this));
             }
         };
 
@@ -659,25 +659,25 @@ namespace {
             ++this->slot_index;
         }
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator)
         {
             if (slot_index != 2 || this->bad) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong number of arguments for 'rename' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong number of arguments for 'rename' command\r\n"));
             }
             slot src_slot = key_slot[0].get_slot();
             slot dst_slot = key_slot[1].get_slot();
             LOG(DEBUG) << "#Rename slots: " << src_slot << " - " << dst_slot;
             if (src_slot == dst_slot) {
-                return util::mkptr(new SingleCommandGroup(
-                    c, Buffer(command_begin, split_points[2]), src_slot));
+                return util::make_unique_ptr(new SingleCommandGroup(
+                        c, Buffer(command_begin, split_points[2]), src_slot));
             }
-            util::sptr<SingleCommandGroup> g(new SingleCommandGroup(c));
-            g->command = util::mkptr(new RenameCommand(
-                Buffer(split_points[0], split_points[1]),
-                Buffer(split_points[1], split_points[2]),
-                src_slot, dst_slot, *g));
+            util::unique_pointer<SingleCommandGroup> g(new SingleCommandGroup(c));
+            g->command = util::make_unique_ptr(new RenameCommand(
+                    Buffer(split_points[0], split_points[1]),
+                    Buffer(split_points[1], split_points[2]),
+                    src_slot, dst_slot, *g));
             return std::move(g);
         }
     };
@@ -690,7 +690,7 @@ namespace {
         {
             Buffer buffer;
         public:
-            Subscribe(util::sref<Client> client, Buffer b)
+            Subscribe(util::weak_pointer<Client> client, Buffer b)
                 : LongCommandGroup(client)
                 , buffer(std::move(b))
             {}
@@ -720,14 +720,14 @@ namespace {
             , no_arg(true)
         {}
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator end)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator end)
         {
             if (this->no_arg) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong number of arguments for 'subscribe' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong number of arguments for 'subscribe' command\r\n"));
             }
-            return util::mkptr(new Subscribe(c, Buffer(this->begin, end)));
+            return util::make_unique_ptr(new Subscribe(c, Buffer(this->begin, end)));
         }
     };
 
@@ -740,7 +740,7 @@ namespace {
             Buffer buffer;
             slot key_slot;
         public:
-            BlockedPop(util::sref<Client> client, Buffer b, slot s)
+            BlockedPop(util::weak_pointer<Client> client, Buffer b, slot s)
                 : LongCommandGroup(client)
                 , buffer(std::move(b))
                 , key_slot(s)
@@ -775,15 +775,15 @@ namespace {
             , args_count(0)
         {}
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator end)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator end)
         {
             if (this->args_count != 2) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR BLPOP/BRPOP takes exactly 2 arguments KEY TIMEOUT in proxy\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR BLPOP/BRPOP takes exactly 2 arguments KEY TIMEOUT in proxy\r\n"));
             }
-            return util::mkptr(new BlockedPop(c, Buffer(this->cmd_begin, end),
-                                              this->slot_calc.get_slot()));
+            return util::make_unique_ptr(new BlockedPop(c, Buffer(this->cmd_begin, end),
+                                                        this->slot_calc.get_slot()));
         }
     };
 
@@ -819,15 +819,15 @@ namespace {
             , key_count(0)
         {}
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator end)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator end)
         {
             if (this->arg_count < 3 || this->key_count != 1) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong number of arguments for 'eval' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong number of arguments for 'eval' command\r\n"));
             }
-            return util::mkptr(new SingleCommandGroup(
-                c, Buffer(this->cmd_begin, end), this->slot_calc.get_slot()));
+            return util::make_unique_ptr(new SingleCommandGroup(
+                    c, Buffer(this->cmd_begin, end), this->slot_calc.get_slot()));
         }
     };
 
@@ -847,15 +847,15 @@ namespace {
             , arg_count(0)
         {}
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator end)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator end)
         {
             if (this->arg_count != 2) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong number of arguments for 'publish' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong number of arguments for 'publish' command\r\n"));
             }
-            return util::mkptr(new SingleCommandGroup(
-                c, Buffer(this->begin, end), util::randint(0, CLUSTER_SLOT_COUNT)));
+            return util::make_unique_ptr(new SingleCommandGroup(
+                    c, Buffer(this->begin, end), util::randint(0, CLUSTER_SLOT_COUNT)));
         }
     };
 
@@ -880,61 +880,61 @@ namespace {
             , _slot(0)
         {}
 
-        util::sptr<CommandGroup> spawn_commands(
-            util::sref<Client> c, Buffer::iterator end)
+        util::unique_pointer<CommandGroup> spawn_commands(
+            util::weak_pointer<Client> c, Buffer::iterator end)
         {
             if (this->_arg_count != 2 || this->_slot >= CLUSTER_SLOT_COUNT) {
-                return util::mkptr(new DirectCommandGroup(
-                    c, "-ERR wrong arguments for 'keysinslot' command\r\n"));
+                return util::make_unique_ptr(new DirectCommandGroup(
+                        c, "-ERR wrong arguments for 'keysinslot' command\r\n"));
             }
             Buffer buffer("*4\r\n$7\r\nCLUSTER\r\n$13\r\nGETKEYSINSLOT\r\n");
             buffer.append_from(this->_arg_start, end);
-            return util::mkptr(new SingleCommandGroup(c, std::move(buffer), this->_slot));
+            return util::make_unique_ptr(new SingleCommandGroup(c, std::move(buffer), this->_slot));
         }
     };
 
-    std::map<std::string, std::function<util::sptr<SpecialCommandParser>(
+    std::map<std::string, std::function<util::unique_pointer<SpecialCommandParser>(
         Buffer::iterator, Buffer::iterator)>> SPECIAL_RSP(
     {
         {"PING",
             [](Buffer::iterator, Buffer::iterator)
             {
-                return util::mkptr(new PingCommandParser);
+                return util::make_unique_ptr(new PingCommandParser);
             }},
         {"INFO",
             [](Buffer::iterator, Buffer::iterator)
             {
-                return util::mkptr(new ProxyStatsCommandParser);
+                return util::make_unique_ptr(new ProxyStatsCommandParser);
             }},
         {"PROXY",
             [](Buffer::iterator, Buffer::iterator)
             {
-                return util::mkptr(new ProxyStatsCommandParser);
+                return util::make_unique_ptr(new ProxyStatsCommandParser);
             }},
         {"UPDATESLOTMAP",
             [](Buffer::iterator, Buffer::iterator)
             {
-                return util::mkptr(new UpdateSlotMapCommandParser);
+                return util::make_unique_ptr(new UpdateSlotMapCommandParser);
             }},
         {"SETREMOTES",
             [](Buffer::iterator, Buffer::iterator)
             {
-                return util::mkptr(new SetRemotesCommandParser);
+                return util::make_unique_ptr(new SetRemotesCommandParser);
             }},
         {"MGET",
             [](Buffer::iterator, Buffer::iterator arg_start)
             {
-                return util::mkptr(new MGetCommandParser(arg_start));
+                return util::make_unique_ptr(new MGetCommandParser(arg_start));
             }},
         {"SUBSCRIBE",
             [](Buffer::iterator command_begin, Buffer::iterator)
             {
-                return util::mkptr(new SubscribeCommandParser(command_begin));
+                return util::make_unique_ptr(new SubscribeCommandParser(command_begin));
             }},
         {"PSUBSCRIBE",
             [](Buffer::iterator command_begin, Buffer::iterator)
             {
-                return util::mkptr(new SubscribeCommandParser(command_begin));
+                return util::make_unique_ptr(new SubscribeCommandParser(command_begin));
             }},
     });
 
@@ -985,8 +985,8 @@ namespace {
         Iterator last_command_begin;
         KeySlotCalc slot_calc;
         bool last_command_is_bad;
-        util::sptr<SpecialCommandParser> special_parser;
-        util::sref<Client> client;
+        util::unique_pointer<SpecialCommandParser> special_parser;
+        util::weak_pointer<Client> client;
         std::pair<Iterator, Iterator> command_name_pos;
         std::pair<Iterator, Iterator> command_key_pos;
 
@@ -995,7 +995,7 @@ namespace {
             this->_on_str(*this, begin, end);
         }
 
-        ClientCommandSplitter(Iterator i, util::sref<Client> cli)
+        ClientCommandSplitter(Iterator i, util::weak_pointer<Client> cli)
             : BaseType(i)
             , _on_str(ClientCommandSplitter::on_command_name)
             , last_command_begin(i)
@@ -1046,10 +1046,10 @@ namespace {
         {
             this->_on_str = ClientCommandSplitter::on_command_name;
             if (this->last_command_is_bad) {
-                this->client->push_command(util::mkptr(new DirectCommandGroup(
-                    client, "-ERR Unknown command or command key not specified\r\n")));
+                this->client->push_command(util::make_unique_ptr(new DirectCommandGroup(
+                        client, "-ERR Unknown command or command key not specified\r\n")));
             } else if (this->special_parser.nul()) {
-                auto command_group = util::mkptr(new SingleCommandGroup(
+                auto command_group = util::make_unique_ptr(new SingleCommandGroup(
                         client, Buffer(this->last_command_begin, i), this->slot_calc.get_slot()));
                 command_group->command->command_name_pos = command_name_pos;
                 command_group->command->command_key_pos = command_key_pos;
@@ -1095,7 +1095,7 @@ void Command::responsed()
     this->group->command_responsed();
 }
 
-void cerb::split_client_command(Buffer& buffer, util::sref<Client> cli)
+void cerb::split_client_command(Buffer& buffer, util::weak_pointer<Client> cli)
 {
     ClientCommandSplitter c(cerb::msg::split_by(
         buffer.begin(), buffer.end(), ClientCommandSplitter(
@@ -1127,49 +1127,49 @@ void Command::allow_write_commands()
     for (std::string const& c: WRITE_COMMANDS) {
         STD_COMMANDS.insert(c);
     }
-    static std::map<std::string, std::function<util::sptr<SpecialCommandParser>(
+    static std::map<std::string, std::function<util::unique_pointer<SpecialCommandParser>(
         Buffer::iterator, Buffer::iterator)>> const SPECIAL_WRITE_COMMAND(
     {
         {"DEL",
             [](Buffer::iterator, Buffer::iterator arg_start)
             {
-                return util::mkptr(new DelCommandParser(arg_start));
+                return util::make_unique_ptr(new DelCommandParser(arg_start));
             }},
         {"MSET",
             [](Buffer::iterator, Buffer::iterator arg_start)
             {
-                return util::mkptr(new MSetCommandParser(arg_start));
+                return util::make_unique_ptr(new MSetCommandParser(arg_start));
             }},
         {"RENAME",
             [](Buffer::iterator command_begin, Buffer::iterator arg_start)
             {
-                return util::mkptr(new RenameCommandParser(
-                    command_begin, arg_start));
+                return util::make_unique_ptr(new RenameCommandParser(
+                        command_begin, arg_start));
             }},
         {"PUBLISH",
             [](Buffer::iterator command_begin, Buffer::iterator)
             {
-                return util::mkptr(new PublishCommandParser(command_begin));
+                return util::make_unique_ptr(new PublishCommandParser(command_begin));
             }},
         {"KEYSINSLOT",
             [](Buffer::iterator, Buffer::iterator arg_start)
             {
-                return util::mkptr(new KeysInSlotParser(arg_start));
+                return util::make_unique_ptr(new KeysInSlotParser(arg_start));
             }},
         {"BLPOP",
             [](Buffer::iterator command_begin, Buffer::iterator)
             {
-                return util::mkptr(new BlockedListPopParser(command_begin));
+                return util::make_unique_ptr(new BlockedListPopParser(command_begin));
             }},
         {"BRPOP",
             [](Buffer::iterator command_begin, Buffer::iterator)
             {
-                return util::mkptr(new BlockedListPopParser(command_begin));
+                return util::make_unique_ptr(new BlockedListPopParser(command_begin));
             }},
         {"EVAL",
             [](Buffer::iterator command_begin, Buffer::iterator)
             {
-                return util::mkptr(new EvalCommandParser(command_begin));
+                return util::make_unique_ptr(new EvalCommandParser(command_begin));
             }},
     });
     for (auto const& c: SPECIAL_WRITE_COMMAND) {
@@ -1178,7 +1178,7 @@ void Command::allow_write_commands()
 }
 
 namespace cerb {
-    OneSlotCommand::OneSlotCommand(Buffer b, util::sref<CommandGroup> g, slot ks)
+    OneSlotCommand::OneSlotCommand(Buffer b, util::weak_pointer<CommandGroup> g, slot ks)
             : DataCommand(std::move(b), g)
             , key_slot(ks)
     {

@@ -7,7 +7,7 @@
 
 using namespace cerb;
 
-Acceptor::Acceptor(util::sref<Proxy> p, int listen_port)
+Acceptor::Acceptor(util::weak_pointer<Proxy> p, int listen_port)
     : Connection(fctl::new_stream_socket())
     , _proxy(p)
 {

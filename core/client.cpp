@@ -94,7 +94,7 @@ void Client::_push_awaitings_to_ready()
     {
         return;
     }
-    for (util::sptr<CommandGroup>& g: this->_awaiting_groups) {
+    for (util::unique_pointer<CommandGroup>& g: this->_awaiting_groups) {
         g->append_buffer_to(this->_output_buffer_set);
         this->_ready_groups.push_back(std::move(g));
     }
@@ -124,13 +124,13 @@ void Client::_read_request()
     if (n == 0) {
         return this->close();
     }
-    ::split_client_command(this->_buffer, util::mkref(*this));
+    ::split_client_command(this->_buffer, util::make_weak_pointer(*this));
     if (this->_awaiting_groups.empty()) {
         this->_process();
     }
 }
 
-void Client::reactivate(util::sref<Command> cmd)
+void Client::reactivate(util::weak_pointer<Command> cmd)
 {
     Server* s = cmd->select_server(this->_proxy);
     if (s == nullptr) {
@@ -155,7 +155,7 @@ void Client::_process()
 
         if (g->wait_remote()) {
             ++this->_awaiting_count;
-            g->select_remote(this->_proxy);
+            g->select_server_and_push_command_to_it(this->_proxy);
         }
         this->_awaiting_groups.push_back(std::move(g));
     }
@@ -187,7 +187,7 @@ void Client::add_peer(Server* svr)
     this->_peers.insert(svr);
 }
 
-void Client::push_command(util::sptr<CommandGroup> g)
+void Client::push_command(util::unique_pointer<CommandGroup> g)
 {
     this->_parsed_groups.push_back(std::move(g));
 }

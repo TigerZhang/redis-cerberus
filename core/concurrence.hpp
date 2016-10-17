@@ -11,8 +11,8 @@ namespace cerb {
 
     class ListenThread {
         int const _listen_port;
-        util::sptr<Proxy> _proxy;
-        util::sptr<std::thread> _thread;
+        util::unique_pointer<Proxy> _proxy;
+        util::unique_pointer<std::thread> _thread;
         msize_t const* _mem_buffer_stat;
     public:
         explicit ListenThread(int listen_port);
@@ -28,12 +28,12 @@ namespace cerb {
         void run();
         void join();
 
-        util::sref<Proxy const> get_proxy() const
+        util::weak_pointer<Proxy const> get_proxy() const
         {
             return *_proxy;
         }
 
-        util::sref<Proxy> get_proxy()
+        util::weak_pointer<Proxy> get_proxy()
         {
             return *_proxy;
         }

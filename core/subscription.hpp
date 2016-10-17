@@ -11,7 +11,7 @@ namespace cerb {
         : public ProxyConnection
     {
     protected:
-        util::sref<Server> const _attached_server;
+        util::weak_pointer<Server> const _attached_server;
     public:
         LongConnection(int clientfd, Server* svr);
         ~LongConnection();

@@ -17,7 +17,7 @@ namespace cerb {
         virtual ~Response() {}
         Response(Response const&) = delete;
 
-        virtual void rsp_to(util::sref<DataCommand> c, util::sref<Proxy> p) = 0;
+        virtual void rsp_to(util::weak_pointer<DataCommand> c, util::weak_pointer<Proxy> p) = 0;
         virtual Buffer const& get_buffer() const = 0;
         virtual bool server_moved() const { return false; }
         virtual bool is_not_found() const { return false; }
@@ -26,7 +26,7 @@ namespace cerb {
         static Buffer const NIL;
     };
 
-    std::vector<util::sptr<Response>> split_server_response(Buffer& buffer);
+    std::vector<util::unique_pointer<Response>> split_server_response(Buffer& buffer);
 
 }
 
