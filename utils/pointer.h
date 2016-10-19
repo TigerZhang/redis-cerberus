@@ -25,6 +25,10 @@ namespace util {
         typedef RawType value_type;
         typedef typename std::unique_ptr<RawType>::pointer pointer;
 
+        explicit weak_pointer(std::weak_ptr<RawType> ptr)
+        : _ptr(ptr.lock().get())
+        {}
+
         explicit weak_pointer(pointer ptr)
             : _ptr(ptr)
         {}
@@ -157,7 +161,7 @@ namespace util {
         }
 
         explicit unique_pointer(int) = delete;
-        pointer get() const = delete;
+//        pointer get() const = delete;
         explicit operator bool() const = delete;
     };
 

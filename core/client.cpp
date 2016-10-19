@@ -16,7 +16,7 @@ static msize_t const MAX_RESPONSES = 256;
 Client::Client(int fd, Proxy* p)
     : ProxyConnection(fd)
     , _proxy(p)
-    , _awaiting_count(0)
+    , _count_of_requests_waiting_response_from_upstream_server(0)
 {
     p->poll_add_ro(this);
 }
@@ -44,7 +44,7 @@ void Client::on_events(int events)
         if (poll::event_is_write(events)) {
             this->_write_response();
         }
-        if (this->_output_buffer_set.empty()) {
+        if (this->_downstream_outgoing_buffers.empty()) {
             this->_proxy->set_conn_poll_ro(this);
         } else {
             this->_proxy->set_conn_poll_rw(this);
@@ -71,23 +71,23 @@ std::string Client::str() const
     return fmt::format("Client({}@{})", this->fd, static_cast<void const*>(this));
 }
 
-void Client::_send_buffer_set()
+void Client::_write_outgoing_responses_to_client()
 {
-    if (this->_output_buffer_set.writev(this->fd)) {
+    if (this->_downstream_outgoing_buffers.writev(this->fd)) {
         for (auto const& g: this->_ready_groups) {
             g->collect_stats(this->_proxy);
         }
         this->_ready_groups.clear();
         this->_peers.clear();
         if (!this->_parsed_groups.empty()) {
-            _process();
+            _forward_request();
         }
     }
 }
 
-void Client::_push_awaitings_to_ready()
+void Client::_do_write_response()
 {
-    if (this->_awaiting_count != 0 || (
+    if (this->_count_of_requests_waiting_response_from_upstream_server != 0 || (
             !this->_ready_groups.empty() &&
             this->_awaiting_groups.size() + this->_ready_groups.empty() > MAX_RESPONSES
         ))
@@ -95,25 +95,25 @@ void Client::_push_awaitings_to_ready()
         return;
     }
     for (util::unique_pointer<CommandGroup>& g: this->_awaiting_groups) {
-        g->append_buffer_to(this->_output_buffer_set);
+        g->enqueue_response_to_client(this->_downstream_outgoing_buffers);
         this->_ready_groups.push_back(std::move(g));
     }
     this->_awaiting_groups.clear();
-    if (!this->_output_buffer_set.empty()) {
+    if (!this->_downstream_outgoing_buffers.empty()) {
         this->_proxy->set_conn_poll_rw(this);
     }
 }
 
 void Client::_write_response()
 {
-    if (!this->_output_buffer_set.empty()) {
-        this->_send_buffer_set();
+    if (!this->_downstream_outgoing_buffers.empty()) {
+        this->_write_outgoing_responses_to_client();
     }
-    if (this->_awaiting_groups.empty() || _awaiting_count != 0) {
+    if (this->_awaiting_groups.empty() || _count_of_requests_waiting_response_from_upstream_server != 0) {
         return;
     }
-    this->_push_awaitings_to_ready();
-    this->_send_buffer_set();
+    this->_do_write_response();
+    this->_write_outgoing_responses_to_client();
 }
 
 void Client::_read_request()
@@ -126,7 +126,7 @@ void Client::_read_request()
     }
     ::split_client_command(this->_buffer, util::make_weak_pointer(*this));
     if (this->_awaiting_groups.empty()) {
-        this->_process();
+        this->_forward_request();
     }
 }
 
@@ -140,7 +140,7 @@ void Client::reactivate(util::weak_pointer<Command> cmd)
     this->_proxy->set_conn_poll_rw(s);
 }
 
-void Client::_process()
+void Client::_forward_request()
 {
     msize_t pipe_groups = std::min(msize_t(this->_parsed_groups.size()), MAX_PIPE);
     LOG(DEBUG) << fmt::format("{} Process {} over {} commands", this->str(), pipe_groups, this->_parsed_groups.size());
@@ -154,8 +154,14 @@ void Client::_process()
         }
 
         if (g->should_send_to_upstream_server_and_wait_response()) {
-            ++this->_awaiting_count;
-            g->select_server_and_push_command_to_it(this->_proxy);
+            ++this->_count_of_requests_waiting_response_from_upstream_server;
+            if (g->is_sequence_group()) {
+                GetSequenceCommandGroup* gscg =
+                        static_cast<GetSequenceCommandGroup*>(g.get());
+                gscg->send_currnet_command();
+            } else {
+                g->select_server_and_push_command_to_it(this->_proxy);
+            }
         }
         this->_awaiting_groups.push_back(std::move(g));
     }
@@ -166,20 +172,20 @@ void Client::_process()
                                    this->_parsed_groups.begin() + pipe_groups);
     }
 
-    if (0 < this->_awaiting_count) {
+    if (0 < this->_count_of_requests_waiting_response_from_upstream_server) {
         for (Server* svr: this->_peers) {
             this->_proxy->set_conn_poll_rw(svr);
         }
     } else {
-        this->_push_awaitings_to_ready();
+        this->_do_write_response();
     }
     LOG(DEBUG) << "Processed, rest buffer " << this->_buffer.size();
 }
 
-void Client::group_responsed()
+void Client::handle_response()
 {
-    --this->_awaiting_count;
-    this->_push_awaitings_to_ready();
+    --this->_count_of_requests_waiting_response_from_upstream_server;
+    this->_do_write_response();
 }
 
 void Client::add_peer(Server* svr)
@@ -190,4 +196,8 @@ void Client::add_peer(Server* svr)
 void Client::push_command(util::unique_pointer<CommandGroup> g)
 {
     this->_parsed_groups.push_back(std::move(g));
+}
+
+Proxy *const Client::get_proxy() const {
+    return _proxy;
 }

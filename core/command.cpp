@@ -30,7 +30,7 @@ namespace {
             proxy->retry_move_ask_command_later(util::make_weak_pointer(*cmd));
             return nullptr;
         }
-        svr->push_client_command(util::make_weak_pointer(*cmd));
+        svr->receive_request(util::make_weak_pointer(*cmd));
         return svr;
     }
 
@@ -53,7 +53,7 @@ namespace {
             return ::select_server_for(proxy, this, this->current_key_slot);
         }
 
-        void on_remote_responsed(Buffer rsp, bool error)
+        void receive_response(Buffer& rsp, bool error)
         {
             on_rsp(std::move(rsp), error);
         }
@@ -98,7 +98,7 @@ namespace {
 
         void select_server_and_push_command_to_it(Proxy *) {}
 
-        void append_buffer_to(BufferSet& b)
+        void enqueue_response_to_client(BufferSet& b)
         {
             b.append(command->buffer);
         }
@@ -108,7 +108,7 @@ namespace {
             return command->buffer->size();
         }
 
-        void command_responsed() {}
+        void receive_response() {}
     };
 
     class StatsCommandGroup
@@ -154,13 +154,13 @@ namespace {
             , command(new OneSlotCommand(std::move(b), util::make_weak_pointer(*this), ks))
         {}
 
-        void command_responsed()
+        void receive_response()
         {
-            this->client->group_responsed();
+            this->client->handle_response();
             this->complete = true;
         }
 
-        void append_buffer_to(BufferSet& b)
+        void enqueue_response_to_client(BufferSet& b)
         {
             b.append(command->buffer);
         }
@@ -201,17 +201,17 @@ namespace {
             commands.push_back(std::move(c));
         }
 
-        void command_responsed()
+        void receive_response()
         {
             if (--this->awaiting_count == 0) {
                 this->arr_payload->swap(Buffer(
                     fmt::format("*{}\r\n", this->commands.size())));
-                this->client->group_responsed();
+                this->client->handle_response();
                 this->complete = true;
             }
         }
 
-        void append_buffer_to(BufferSet& b)
+        void enqueue_response_to_client(BufferSet& b)
         {
             b.append(this->arr_payload);
             for (auto const& c: this->commands) {
@@ -273,8 +273,8 @@ namespace {
         }
 
         void select_server_and_push_command_to_it(Proxy *) {}
-        void append_buffer_to(BufferSet&) {}
-        void command_responsed() {}
+        void enqueue_response_to_client(BufferSet&) {}
+        void receive_response() {}
     };
 
     std::string stats_string()
@@ -469,7 +469,7 @@ namespace {
                 : MultipleCommandsGroup(c)
             {}
 
-            void append_buffer_to(BufferSet& b)
+            void enqueue_response_to_client(BufferSet& b)
             {
                 cerb::rint count = 0;
                 for (auto const& c: this->commands) {
@@ -511,7 +511,7 @@ namespace {
                 : MultipleCommandsGroup(c)
             {}
 
-            void append_buffer_to(BufferSet& b)
+            void enqueue_response_to_client(BufferSet& b)
             {
                 b.append(RSP_OK);
             }
@@ -972,6 +972,7 @@ namespace {
         {
             s.command_key_pos.first = begin;
             s.command_key_pos.second = end;
+            s.key = std::move(std::make_shared<std::string>(begin, end));
             s.last_command_is_bad = false;
             s._on_str = ClientCommandSplitter::on_string_nop;
             std::for_each(begin, end, [&](byte b) { s.slot_calc.next_byte(b); });
@@ -989,6 +990,7 @@ namespace {
         util::weak_pointer<Client> client;
         std::pair<Iterator, Iterator> command_name_pos;
         std::pair<Iterator, Iterator> command_key_pos;
+        std::shared_ptr<std::string> key;
 
         void on_string(Iterator begin, Iterator end)
         {
@@ -1049,10 +1051,18 @@ namespace {
                 this->client->push_command(util::make_unique_ptr(new DirectCommandGroup(
                         client, "-ERR Unknown command or command key not specified\r\n")));
             } else if (this->special_parser.nul()) {
-                auto command_group = util::make_unique_ptr(new SingleCommandGroup(
-                        client, Buffer(this->last_command_begin, i), this->slot_calc.get_slot()));
-                command_group->command->command_name_pos = command_name_pos;
-                command_group->command->command_key_pos = command_key_pos;
+                std::unique_ptr<Buffer> buffer(new Buffer(this->last_command_begin, i));
+                LOG(DEBUG) << "on_split_point " << buffer->to_string();
+                util::unique_pointer<GetSequenceCommandGroup> command_group
+                        = util::make_unique_ptr(
+                        new GetSequenceCommandGroup(client, std::move(buffer), std::move(this->key)));
+//                command_group->_origin_command->command_name_pos = command_name_pos;
+//                command_group->_origin_command->command_key_pos = command_key_pos;
+                LOG(DEBUG) << "on_split_point key " << this->key.get()->data();
+//                auto command_group = util::make_unique_ptr(new SingleCommandGroup(
+//                        client, Buffer(this->last_command_begin, i), this->slot_calc.get_slot()));
+//                command_group->command->command_name_pos = command_name_pos;
+//                command_group->command->command_key_pos = command_key_pos;
                 this->client->push_command(std::move(command_group));
             } else {
                 this->client->push_command(this->special_parser->spawn_commands(this->client, i));
@@ -1084,15 +1094,16 @@ namespace {
 
 }
 
-void Command::on_remote_responsed(Buffer rsp, bool)
+void Command::receive_response(Buffer rsp, bool)
 {
     this->buffer->swap(rsp);
-    this->responsed();
+//    this->responsed();
+    this->group->receive_response();
 }
 
 void Command::responsed()
 {
-    this->group->command_responsed();
+    this->group->receive_response();
 }
 
 void cerb::split_client_command(Buffer& buffer, util::weak_pointer<Client> cli)
@@ -1185,9 +1196,207 @@ namespace cerb {
         LOG(DEBUG) << "-Keyslot = " << this->key_slot;
     }
 
+    OneSlotCommand::OneSlotCommand(std::unique_ptr<Buffer> b, util::weak_pointer<CommandGroup> g, slot ks)
+            : DataCommand(std::move(b), g)
+            , key_slot(ks)
+    {
+        LOG(DEBUG) << "-Keyslot = " << this->key_slot;
+    }
+
     Server* OneSlotCommand::select_server(Proxy* proxy)
     {
         return ::select_server_for(proxy, this, this->key_slot);
     }
 
+    SequenceCommandGroup::SequenceCommandGroup(util::weak_pointer<Client> cli,
+                                               std::unique_ptr<Buffer> buffer)
+            : CommandGroup(cli)
+    , _origin_command(std::make_shared<OneSlotCommand>(std::move(buffer), util::weak_pointer<CommandGroup>(this), 0))
+    {
+        _proxy = cli->get_proxy();
+    }
+
+    void SequenceCommandGroup::send_currnet_command() {
+        Server* server = current_state->target_server;
+        if (server == nullptr) {
+            return;
+        }
+        current_state->command = current_state->make_command(
+                        origin_command, previous_command, previous_response);
+        server->receive_request(util::weak_pointer<DataCommand>(
+                current_state->command.get()));
+        client->get_proxy()->set_conn_poll_rw(server);
+    }
+
+    void SequenceCommandGroup::receive_response() {
+        auto response = current_state->command->buffer;
+        // check type of response
+        // determine next state
+        previous_command = current_state;
+        previous_response = response;
+        current_state = current_state->next_state_machine[CommandStateMachine::NOT_FOUND];
+        send_currnet_command();
+    }
+
+    GetSequenceCommandGroup::GetSequenceCommandGroup(
+            util::weak_pointer<Client> cli,
+            std::unique_ptr<Buffer> buffer,
+    std::shared_ptr<std::string> key)
+            : key(std::move(key))
+            ,SequenceCommandGroup(cli, std::move(buffer))
+    {
+        _cache = client->get_proxy()->get_cache();
+        _db = client->get_proxy()->get_db();
+
+        // Init command sequence
+        init_command_sequence();
+        _next_command = _commands.begin();
+
+//        LOG(DEBUG) << "GetSequenceCommandGroup " << buffer->to_string();
+    }
+
+    void GetSequenceCommandGroup::init_command_sequence() {
+//        std::string key(_origin_command->command_key_pos.first,
+//                        _origin_command->command_key_pos.second);
+//        std::shared_ptr<std::string> key = key;
+
+        LOG(DEBUG) << "GetSequenceCommandGroup::init_command_sequence _origin_command " << _origin_command->buffer->to_string();
+        LOG(DEBUG) << "GetSequenceCommandGroup::init_command_sequence [" << *key << "]";
+        /*
+         Send GET command
+         handler = get_command_take_one_handle_response
+        response = GetCommand->handle_response()
+         if (response == NOT_FOUND)
+             DumpCommand
+         */
+        /*
+         * current_status, response_result = handler(response)
+         * current_status[response_result] -> command_should_be_issued, new handler, new status
+         */
+        /*
+        GET_command:
+         response_result = response_handler(response): SUCC -> RETUREN, NOT_FOUND -> DUMP_command, FAIL -> RETURN_FAIL
+         DUMP_command:
+         response_result = response_handler(response): SUCC -> RESTORE_command, NOT_FOUND -> RETURN, FAIL -> RETURN_FAIL
+         */
+
+        std::shared_ptr<CommandStateMachine>
+                GetCommand =std::make_shared<CommandStateMachine>(),
+                DumpCommand = std::make_shared<CommandStateMachine>(),
+                RestoreCommand = std::make_shared<CommandStateMachine>(),
+                GetCommand2 = std::make_shared<CommandStateMachine>(),
+                ReturnResult = std::make_shared<CommandStateMachine>(),
+                ReturnFail = std::make_shared<CommandStateMachine>();
+
+        GetCommand->make_command = [this](std::shared_ptr<DataCommand> origin_command,
+                                          std::shared_ptr<CommandStateMachine> previous_command,
+                                          std::shared_ptr<Buffer> previous_response) {
+            return this->_origin_command; };
+        GetCommand->target_server = _cache;
+        GetCommand->response_handler = _handle_response_of_get_command;
+        GetCommand->next_state_machine[CommandStateMachine::SUCC] = ReturnResult;
+        GetCommand->next_state_machine[CommandStateMachine::NOT_FOUND] = DumpCommand;
+        GetCommand->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
+
+        DumpCommand->make_command = [this](std::shared_ptr<DataCommand> origin_command,
+                                                std::shared_ptr<CommandStateMachine> previous_command,
+                                                std::shared_ptr<Buffer> previous_response) {
+            return this->make_dump_command(this->key); };
+        DumpCommand->target_server = _db;
+        DumpCommand->response_handler = _handle_response_of_dump_from_db;
+        DumpCommand->next_state_machine[CommandStateMachine::SUCC] = RestoreCommand;
+        DumpCommand->next_state_machine[CommandStateMachine::NOT_FOUND] = ReturnResult;
+        DumpCommand->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
+
+        RestoreCommand->make_command = [this](std::shared_ptr<DataCommand> origin_command,
+                                             std::shared_ptr<CommandStateMachine> previous_command,
+                                             std::shared_ptr<Buffer> previous_response) {
+            return this->make_restore_command(this->key, previous_response);
+        };
+        RestoreCommand->target_server = _cache;
+        RestoreCommand->response_handler = _handle_response_of_restore_to_cache;
+        RestoreCommand->next_state_machine[CommandStateMachine::SUCC] = GetCommand2;
+        RestoreCommand->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
+
+        GetCommand2->make_command = [this](std::shared_ptr<DataCommand> origin_command,
+                                           std::shared_ptr<CommandStateMachine> previous_command,
+                                           std::shared_ptr<Buffer> previous_response) {
+            return this->_origin_command; };
+        GetCommand2->target_server = _db;
+        GetCommand2->response_handler = _handle_response_of_get_command;
+        GetCommand2->next_state_machine[CommandStateMachine::SUCC] = ReturnResult;
+        GetCommand2->next_state_machine[CommandStateMachine::NOT_FOUND] = ReturnResult;
+        GetCommand2->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
+
+        current_state = GetCommand;
+        /*
+        // 1. GET command (to cache)
+        _commands.push_back(std::make_shared<CommandAndHandler>(
+                std::make_tuple(_origin_command, _cache, _handle_response_of_read_from_cache_take_one)
+        ));
+
+        _dump_command = make_dump_command(key);
+
+        // 2. if GET command failed: nil, send DUMP (to db)
+        // if get succeed, return response to client
+        _commands.push_back(std::make_shared<CommandAndHandler>(
+                std::make_tuple(_dump_command, _db, _handle_response_of_dump_from_db)
+        ));
+
+        _restore_command = make_restore_command(key);
+
+        // 3. if DUMP command failed: nil, return nil to client
+        // if DUMP succeed, send RESTORE command (to cache)
+        _commands.push_back(std::make_shared<CommandAndHandler>(
+                std::make_tuple(_restore_command, _cache, _handle_response_of_restore_to_cache)
+        ));
+
+        // 4. if RESTORE command failed, return error to client
+        // if RESTORE succeed, send GET command (to cache)
+        _commands.push_back(std::make_shared<CommandAndHandler>(
+                std::make_tuple(_origin_command, _cache, _handle_response_of_read_from_cache_take_two)
+        ));
+
+        // 5. if GET command (take 2) failed, return error to client
+        // if GET command (take 2) succeed, send response to client
+         */
+    }
+
+    void
+    GetSequenceCommandGroup::_handle_response_of_read_from_cache_take_one(
+            std::shared_ptr<DataCommand> command,
+            std::shared_ptr<Response> response) {
+        if (response->is_not_found()) {
+            _dump_command = make_dump_command(_origin_command->key);
+            // read failed: not found, next step: dump(db)
+            _db->receive_request(
+                    util::make_weak_pointer(*_dump_command.get()));
+            _proxy->set_conn_poll_rw(_db);
+        }
+    }
+
+    std::shared_ptr<DataCommand>
+    GetSequenceCommandGroup::make_dump_command(std::shared_ptr<std::string> key) {
+        const std::string DUMP_CMD = "*2\r\n$4\r\nDUMP\r\n${}\r\n{}\r\n";
+        return std::make_shared<OneSlotCommand>(
+                std::unique_ptr<Buffer>(new Buffer(fmt::format(DUMP_CMD, key->size(), *key))),
+                util::weak_pointer<CommandGroup>(this), 0);
+    }
+
+    std::shared_ptr<DataCommand>
+    GetSequenceCommandGroup::make_restore_command(
+            std::shared_ptr<std::string> key,
+            std::shared_ptr<Buffer> dump_response) {
+        const std::string RESTORE_CMD = "*4\r\n"
+                "$7\r\nRESTORE\r\n"
+                "${}\r\n{}\r\n"
+                "$1\r\n0\r\n"
+                "{}";
+
+        return std::make_shared<OneSlotCommand>(
+                Buffer(fmt::format(RESTORE_CMD,
+                                   key->size(), key,
+                                   dump_response->to_string())),
+                util::weak_pointer<CommandGroup>(this), 0);
+    }
 }

@@ -28,6 +28,8 @@ namespace cerb_global {
 
     void set_db(util::Address db);
     util::Address& get_db();
+
+    extern bool stopped;
 }
 
 #endif /* __CERBERUS_GLOBALS_HPP__ */

@@ -17,7 +17,7 @@ namespace cerb {
         virtual ~Response() {}
         Response(Response const&) = delete;
 
-        virtual void rsp_to(util::weak_pointer<DataCommand> c, util::weak_pointer<Proxy> p) = 0;
+        virtual void forward_response(util::weak_pointer<DataCommand> c, util::weak_pointer<Proxy> p) = 0;
         virtual Buffer const& get_buffer() const = 0;
         virtual bool server_moved() const { return false; }
         virtual bool is_not_found() const { return false; }

@@ -10,6 +10,8 @@ namespace cerb {
 
     class Proxy;
     class Server;
+    class CommandGroup;
+    class Command;
 
     class Client
         : public ProxyConnection
@@ -18,17 +20,21 @@ namespace cerb {
         void _read_request();
 
         Proxy* const _proxy;
+    public:
+        Proxy *const get_proxy() const;
+
+    private:
         std::set<Server*> _peers;
         std::vector<util::unique_pointer<CommandGroup>> _parsed_groups;
         std::vector<util::unique_pointer<CommandGroup>> _awaiting_groups;
         std::vector<util::unique_pointer<CommandGroup>> _ready_groups;
-        int _awaiting_count;
+        int _count_of_requests_waiting_response_from_upstream_server;
         Buffer _buffer;
-        BufferSet _output_buffer_set;
+        BufferSet _downstream_outgoing_buffers;
 
-        void _process();
-        void _send_buffer_set();
-        void _push_awaitings_to_ready();
+        void _forward_request();
+        void _write_outgoing_responses_to_client();
+        void _do_write_response(); // and move command from awaiting group to ready group
     public:
         Client(int fd, Proxy* p);
         ~Client();
@@ -37,7 +43,7 @@ namespace cerb {
         void after_events(std::set<Connection*>&);
         std::string str() const;
 
-        void group_responsed();
+        void handle_response();
         void add_peer(Server* svr);
         void reactivate(util::weak_pointer<Command> cmd);
         void push_command(util::unique_pointer<CommandGroup> g);

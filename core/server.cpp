@@ -24,7 +24,7 @@ void Server::on_events(int events)
     }
     if (poll::event_is_read(events)) {
         try {
-            this->_recv_from();
+            this->_read_response();
         } catch (BadRedisMessage& e) {
             LOG(ERROR) << "Receive bad message from server " << this->str()
                        << " because: " << e.what()
@@ -33,29 +33,30 @@ void Server::on_events(int events)
             return this->close_conn();
         }
     }
-    this->_push_to_buffer_set();
-    if (poll::event_is_write(events)) {
-        this->_outgoing_buffers.writev(this->fd);
+    this->_handle_request(events);
+}
+
+void Server::_handle_request(int events)
+{
+    auto now = Clock::now();
+    for (util::weak_pointer<DataCommand> c: this->_incoming_commands) {
+        this->_sent_commands.push_back(c);
+        this->_upstream_outgoing_buffers.append(c->buffer);
+        c->sent_time = now;
     }
-    if (this->_outgoing_buffers.empty()) {
+    this->_incoming_commands.clear();
+
+    if (poll::event_is_write(events)) {
+        this->_upstream_outgoing_buffers.writev(this->fd);
+    }
+    if (this->_upstream_outgoing_buffers.empty()) {
         this->_proxy->set_conn_poll_ro(this);
     } else {
         this->_proxy->set_conn_poll_rw(this);
     }
 }
 
-void Server::_push_to_buffer_set()
-{
-    auto now = Clock::now();
-    for (util::weak_pointer<DataCommand> c: this->_incoming_commands) {
-        this->_sent_commands.push_back(c);
-        this->_outgoing_buffers.append(c->buffer);
-        c->sent_time = now;
-    }
-    this->_incoming_commands.clear();
-}
-
-void Server::_recv_from()
+void Server::_read_response()
 {
     int n = this->_buffer.read(this->fd);
     if (n == 0) {
@@ -76,7 +77,7 @@ void Server::_recv_from()
     LOG(DEBUG) << "+rest buffer: " << this->_buffer.size();
     auto cmd_it = this->_sent_commands.begin();
     auto now = Clock::now();
-    for (util::unique_pointer<Response>& rsp: responses) {
+    for (util::unique_pointer<Response>& response: responses) {
         util::weak_pointer<DataCommand> c = *cmd_it++;
         if (c.not_nul()) {
             if (c->origin_command) {
@@ -84,7 +85,7 @@ void Server::_recv_from()
 
                 // e.g.: when a key missed in cache,
                 // try to promote it from db (dump/restore)
-//                rsp->rsp_to(c->origin_command, util::make_weak_pointer(*this->_proxy));
+//                rsp->forward_response(c->origin_command, util::make_weak_pointer(*this->_proxy));
 //                c->resp_time = now;
 //                c->origin_command->resp_time = now;
 
@@ -92,12 +93,12 @@ void Server::_recv_from()
                 // if (c->command_name = COMMAND_DUMP) {
                 // }
                 // send restore to original server
-                std::string respone_str = rsp->get_buffer().to_string();
+                std::string respone_str = response->get_buffer().to_string();
                 // TODO: better implementation for checking if the response is "key not found"
                 if (c->commandType == Command::DUMP_COMMAND) {
-                    if (rsp->is_not_found()) {
-                        rsp->rsp_to(util::make_weak_pointer(*c->origin_command),
-                                    util::make_weak_pointer(*this->_proxy));
+                    if (response->is_not_found()) {
+                        response->forward_response(util::make_weak_pointer(*c->origin_command),
+                                                   util::make_weak_pointer(*this->_proxy));
                         c->origin_command->resp_time = now;
                         c->resp_time = now;
                     } else if (c->origin_server) {
@@ -122,23 +123,25 @@ void Server::_recv_from()
                                 c->group, s);
                         restore_command->origin_command = c.get();
                         restore_command->commandType = Command::RESTORE_COMMAND;
-                        c->origin_server->push_client_command(util::make_weak_pointer(*restore_command));
+                        c->origin_server->receive_request(util::make_weak_pointer(*restore_command));
                         _proxy->set_conn_poll_rw(c->origin_server);
                     }
                 } else if (c->commandType == Command::RESTORE_COMMAND) {
                     DataCommand* dump_command = c->origin_command;
                     DataCommand* origin_command = dump_command->origin_command;
-                    dump_command->origin_server->push_client_command(util::make_weak_pointer(*origin_command));
+                    dump_command->origin_server->receive_request(util::make_weak_pointer(*origin_command));
                     _proxy->set_conn_poll_rw(dump_command->origin_server);
                 }
 
             } else {
-                if (rsp->is_not_found() && need_try_to_promote_from_db(c)) {
-                    try_to_promote(c, this);
-//                Response& response_from_db =
-//                response_from_db.rsp_to(c, util::make_weak_pointer(*this->_proxy));
-                } else {
-                    rsp->rsp_to(c, util::make_weak_pointer(*this->_proxy));
+//                if (rsp->is_not_found() && need_try_to_promote_from_db(c)) {
+//                    try_to_promote(c, this);
+////                Response& response_from_db =
+////                response_from_db.rsp_to(c, util::make_weak_pointer(*this->_proxy));
+//                } else
+                 {
+                     response->forward_response(
+                             c, util::make_weak_pointer(*this->_proxy));
                     c->resp_time = now;
                 }
             }
@@ -147,7 +150,7 @@ void Server::_recv_from()
     this->_sent_commands.erase(this->_sent_commands.begin(), cmd_it);
 }
 
-void Server::push_client_command(util::weak_pointer<DataCommand> cmd)
+void Server::receive_request(util::weak_pointer<DataCommand> cmd)
 {
     _incoming_commands.push_back(cmd);
     cmd->group->client->add_peer(this);
@@ -210,7 +213,7 @@ void Server::close_conn()
         LOG(INFO) << "Close " << this->str();
         this->close();
         this->_buffer.clear();
-        this->_outgoing_buffers.clear();
+        this->_upstream_outgoing_buffers.clear();
 
         for (util::weak_pointer<DataCommand> c: this->_incoming_commands) {
             this->_proxy->retry_move_ask_command_later(c);
@@ -341,7 +344,7 @@ void Server::try_to_promote(util::weak_pointer<DataCommand> command, Server *ser
         dump_command->origin_command = command.get();
         dump_command->origin_server = server;
         dump_command->commandType = Command::DUMP_COMMAND;
-        db->push_client_command(util::make_weak_pointer(*dump_command));
+        db->receive_request(util::make_weak_pointer(*dump_command));
         _proxy->set_conn_poll_rw(db);
     }
 }

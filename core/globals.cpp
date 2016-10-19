@@ -5,6 +5,7 @@
 
 std::vector<cerb::ListenThread> cerb_global::all_threads;
 thread_local cerb::msize_t cerb_global::allocated_buffer(0);
+bool cerb_global::stopped = false;
 
 static std::mutex remote_addrs_mutex;
 static std::set<util::Address> remote_addrs;

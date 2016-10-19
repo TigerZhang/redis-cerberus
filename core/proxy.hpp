@@ -174,6 +174,8 @@ namespace cerb {
         void poll_del(Connection* conn);
 
         Server *get_db();
+
+        Server *get_cache();
     };
 
 }

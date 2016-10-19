@@ -185,7 +185,7 @@ void Proxy::_update_slot_map_failed()
     _server_map.clear();
     std::vector<util::weak_pointer<DataCommand>> cmds(std::move(this->_retrying_commands));
     for (util::weak_pointer<DataCommand> c: cmds) {
-        c->on_remote_responsed(Buffer("-CLUSTERDOWN The cluster is down\r\n"), true);
+        c->receive_response(Buffer("-CLUSTERDOWN The cluster is down\r\n"), true);
     }
     _slot_map_expired = false;
 }
@@ -342,6 +342,11 @@ Server* Proxy::get_server_by_slot(slot key_slot)
 Server* Proxy::get_db()
 {
     return _server_map.get_by_slot(1);
+}
+
+Server* Proxy::get_cache()
+{
+    return _server_map.get_by_slot(0);
 }
 
 void Proxy::new_client(int client_fd)

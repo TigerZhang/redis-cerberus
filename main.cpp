@@ -97,7 +97,8 @@ namespace {
     void exit_on_int(int)
     {
         LOG(INFO) << "C-c Exit.";
-        exit(0);
+        cerb_global::stopped = true;
+//        exit(0);
     }
 
     void run(Configuration const& config)

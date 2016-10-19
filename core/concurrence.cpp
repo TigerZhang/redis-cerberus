@@ -22,9 +22,9 @@ void ListenThread::run()
             try {
                 cerb::Acceptor acc(*this->_proxy, this->_listen_port);
                 poll::pevent events[poll::MAX_EVENTS];
-                while (true) {
-                    int nfds = poll::poll_wait(this->_proxy->epfd, events, poll::MAX_EVENTS, -1);
-                    this->_proxy->handle_events(events, nfds);
+                while (!cerb_global::stopped) {
+                    int nfds = poll::poll_wait(this->_proxy->epfd, events, poll::MAX_EVENTS, 300);
+                    if (nfds > 0) this->_proxy->handle_events(events, nfds);
                 }
             } catch (SystemError& e) {
                 LOG(ERROR) << "Unexpected error";

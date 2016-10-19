@@ -22,14 +22,14 @@ namespace cerb {
     {
         Proxy* _proxy;
         Buffer _buffer;
-        BufferSet _outgoing_buffers;
+        BufferSet _upstream_outgoing_buffers;
 
         std::vector<util::weak_pointer<DataCommand>> _incoming_commands;
         std::vector<util::weak_pointer<DataCommand>> _sent_commands;
 
-        void _recv_from();
+        void _read_response();
         void _reconnect(util::Address const& addr, Proxy* p);
-        void _push_to_buffer_set();
+        void _handle_request(int events);
 
         Server()
             : ProxyConnection(-1)
@@ -62,7 +62,7 @@ namespace cerb {
         }
 
         void close_conn();
-        void push_client_command(util::weak_pointer<DataCommand> cmd);
+        void receive_request(util::weak_pointer<DataCommand> cmd);
         void pop_client(Client* cli);
         std::vector<util::weak_pointer<DataCommand>> deliver_commands();
 

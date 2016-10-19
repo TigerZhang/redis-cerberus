@@ -17,26 +17,26 @@ namespace {
         : public Response
     {
     public:
-        Buffer rsp;
+        Buffer response_buffer;
         bool error;
 
         NormalResponse(Buffer r, bool e)
-            : rsp(std::move(r))
+            : response_buffer(std::move(r))
             , error(e)
         {}
 
-        void rsp_to(util::weak_pointer<DataCommand> cmd, util::weak_pointer<Proxy>)
+        void forward_response(util::weak_pointer<DataCommand> cmd, util::weak_pointer<Proxy>)
         {
-            cmd->on_remote_responsed(std::move(this->rsp), error);
+            cmd->receive_response(std::move(this->response_buffer), error);
         }
 
         Buffer const& get_buffer() const
         {
-            return rsp;
+            return response_buffer;
         }
 
         bool is_not_found() const {
-            return rsp.same_as_string("$-1\r\n");
+            return response_buffer.same_as_string("$-1\r\n");
         }
     };
 
@@ -45,7 +45,7 @@ namespace {
     {
         static Buffer const dump;
     public:
-        void rsp_to(util::weak_pointer<DataCommand> cmd, util::weak_pointer<Proxy> p)
+        void forward_response(util::weak_pointer<DataCommand> cmd, util::weak_pointer<Proxy> p)
         {
             p->retry_move_ask_command_later(cmd);
         }
