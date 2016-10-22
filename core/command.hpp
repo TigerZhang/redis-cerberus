@@ -39,13 +39,25 @@ namespace cerb {
         , handle_response(nullptr)
         {}
 
-        Command(std::unique_ptr<Buffer> b, util::weak_pointer<CommandGroup> g)
-                : buffer(std::shared_ptr<Buffer>(std::move(b)))
+        Command(Buffer b, std::shared_ptr<CommandGroup> g)
+                : buffer(new Buffer(std::move(b)))
                 , group(g)
                 , handle_response(nullptr)
         {}
 
-        explicit Command(util::weak_pointer<CommandGroup> g)
+        Command(std::shared_ptr<Buffer> b, std::shared_ptr<CommandGroup> g)
+                : buffer(b)
+                , group(g)
+                , handle_response(nullptr)
+        {}
+
+        Command(std::shared_ptr<Buffer> b, util::weak_pointer<CommandGroup> g)
+                : buffer(b)
+                , group(g)
+                , handle_response(nullptr)
+        {}
+
+        explicit Command(std::shared_ptr<CommandGroup> g)
             : buffer(new Buffer)
             , group(g)
         , handle_response(nullptr)
@@ -70,14 +82,21 @@ namespace cerb {
               commandType(Command::UNKOWN_COMMAND)
         {}
 
-        DataCommand(std::unique_ptr<Buffer> b, util::weak_pointer<CommandGroup> g)
-                : Command(std::move(b), g),
+        DataCommand(std::shared_ptr<Buffer> b, util::weak_pointer<CommandGroup> g)
+                : Command(b, g),
                   origin_command(nullptr),
                   origin_server(nullptr),
                   commandType(Command::UNKOWN_COMMAND)
         {}
 
-        explicit DataCommand(util::weak_pointer<CommandGroup> g)
+        DataCommand(std::shared_ptr<Buffer> b, std::shared_ptr<CommandGroup> g)
+                : Command(b, g),
+                  origin_command(nullptr),
+                  origin_server(nullptr),
+                  commandType(Command::UNKOWN_COMMAND)
+        {}
+
+        explicit DataCommand(std::shared_ptr<CommandGroup> g)
             : Command(g),
               origin_command(nullptr),
               origin_server(nullptr),
@@ -120,7 +139,7 @@ namespace cerb {
         virtual void select_server_and_push_command_to_it(Proxy *proxy) = 0;
         virtual void enqueue_response_to_client(BufferSet &b) = 0;
         virtual int total_buffer_size() const = 0;
-        virtual void receive_response() = 0;
+        virtual void receive_response(std::shared_ptr<Buffer> ptr) = 0;
         virtual void collect_stats(Proxy*) const {}
         virtual bool is_sequence_group() const { return false; }
     };
@@ -149,7 +168,9 @@ That's why CommnadGroup.
     public:
         enum ResponseResult { SUCC, FAIL, NOT_FOUND, ZERO, BIG_THAN_ZERO } ;
 
-        CommandStateMachine() : target_server(nullptr) {}
+        CommandStateMachine() :
+                command(nullptr)
+                , target_server(nullptr) {}
 
         std::shared_ptr<DataCommand> command;
         std::function<std::shared_ptr<DataCommand>
@@ -163,6 +184,8 @@ That's why CommnadGroup.
                 response_handler;
         std::map<CommandStateMachine::ResponseResult, std::shared_ptr<CommandStateMachine>> next_state_machine;
         Server *target_server;
+
+        bool return_now = false;
     };
 
     class SequenceCommandGroup : public CommandGroup {
@@ -175,7 +198,7 @@ That's why CommnadGroup.
         typedef std::vector<std::shared_ptr<CommandAndHandler>> CommnadAndHandlers;
         enum {COMMAND, SERVER, HANDLER};
 
-        explicit SequenceCommandGroup(util::weak_pointer<Client> cli, std::unique_ptr<Buffer> buffer);
+        explicit SequenceCommandGroup(util::weak_pointer<Client> cli, std::shared_ptr<Buffer> buffer);
 
         virtual ~SequenceCommandGroup() {};
 
@@ -185,10 +208,10 @@ That's why CommnadGroup.
         }
         void deliver_client(Proxy*) {}
         bool should_send_to_upstream_server_and_wait_response() const { return false; }
-        void select_server_and_push_command_to_it(Proxy *proxy) {}
-        void enqueue_response_to_client(BufferSet &b) {}
+        void select_server_and_push_command_to_it(Proxy *proxy) { proxy = proxy; }
+        void enqueue_response_to_client(BufferSet &b);
         int total_buffer_size() const { return 0; }
-        void receive_response();
+        void receive_response(std::shared_ptr<Buffer> ptr);
         void collect_stats(Proxy*) const {}
 
         ResponseHandler _handle_response_of_get_command;
@@ -198,6 +221,8 @@ That's why CommnadGroup.
         std::shared_ptr<DataCommand> origin_command;
         std::shared_ptr<CommandStateMachine> previous_command;
         std::shared_ptr<Buffer> previous_response;
+
+        std::vector<std::shared_ptr<CommandStateMachine>> command_state_machines;
 
         void send_currnet_command();
 
@@ -211,7 +236,7 @@ That's why CommnadGroup.
     class GetSequenceCommandGroup : public SequenceCommandGroup {
     public:
         explicit GetSequenceCommandGroup(util::weak_pointer<Client> cli,
-                                         std::unique_ptr<Buffer> buffer,
+                                         std::shared_ptr<Buffer> buffer,
         std::shared_ptr<std::string> key);
         virtual ~GetSequenceCommandGroup() {}
 
@@ -237,6 +262,7 @@ That's why CommnadGroup.
         bool is_sequence_group() const { return true; }
 
         std::shared_ptr<std::string> key;
+        std::shared_ptr<Buffer> buffer;
     };
 
     class OneSlotCommand
@@ -245,7 +271,9 @@ That's why CommnadGroup.
         slot const key_slot;
     public:
         OneSlotCommand(Buffer b, util::weak_pointer<CommandGroup> g, slot ks);
-        OneSlotCommand(std::unique_ptr<Buffer> b, util::weak_pointer<CommandGroup> g, slot ks);
+        OneSlotCommand(std::shared_ptr<Buffer> b, util::weak_pointer<CommandGroup> g, slot ks);
+        OneSlotCommand(std::shared_ptr<Buffer> b, std::shared_ptr<CommandGroup> g, slot ks);
+        OneSlotCommand(Buffer b, std::shared_ptr<CommandGroup> g, slot ks);
 
         Server* select_server(Proxy* proxy);
     };

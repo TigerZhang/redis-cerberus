@@ -264,9 +264,12 @@ static void poll_ctl(Proxy* p, std::map<Connection*, bool> conn_polls)
     for (std::pair<Connection*, bool> conn_writable: conn_polls) {
         Connection* c = conn_writable.first;
         if (c->closed()) {
+            LOG(DEBUG) << "conn " << c->str() << " closed";
             continue;
         }
-        LOG(DEBUG) << " poll ctl " << c->str();
+        bool writable = conn_writable.second;
+        LOG(DEBUG) << " poll ctl " << c->str() << " "
+                   << (writable ? "rw" : "ro");
         if (conn_writable.second) {
             p->poll_rw(c);
         } else {

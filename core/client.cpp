@@ -94,7 +94,7 @@ void Client::_do_write_response()
     {
         return;
     }
-    for (util::unique_pointer<CommandGroup>& g: this->_awaiting_groups) {
+    for (std::shared_ptr<CommandGroup>& g: this->_awaiting_groups) {
         g->enqueue_response_to_client(this->_downstream_outgoing_buffers);
         this->_ready_groups.push_back(std::move(g));
     }
@@ -127,6 +127,8 @@ void Client::_read_request()
     ::split_client_command(this->_buffer, util::make_weak_pointer(*this));
     if (this->_awaiting_groups.empty()) {
         this->_forward_request();
+    } else {
+        LOG(WARNING) << "_read_request(): awaiting groups is not empty. request wasn't forwarded.";
     }
 }
 
@@ -193,11 +195,11 @@ void Client::add_peer(Server* svr)
     this->_peers.insert(svr);
 }
 
-void Client::push_command(util::unique_pointer<CommandGroup> g)
+void Client::push_command(std::shared_ptr<CommandGroup> g)
 {
     this->_parsed_groups.push_back(std::move(g));
 }
 
-Proxy *const Client::get_proxy() const {
+Proxy * Client::get_proxy() {
     return _proxy;
 }

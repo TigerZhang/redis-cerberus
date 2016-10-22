@@ -21,13 +21,13 @@ namespace cerb {
 
         Proxy* const _proxy;
     public:
-        Proxy *const get_proxy() const;
+        Proxy * get_proxy();
 
     private:
         std::set<Server*> _peers;
-        std::vector<util::unique_pointer<CommandGroup>> _parsed_groups;
-        std::vector<util::unique_pointer<CommandGroup>> _awaiting_groups;
-        std::vector<util::unique_pointer<CommandGroup>> _ready_groups;
+        std::vector<std::shared_ptr<CommandGroup>> _parsed_groups;
+        std::vector<std::shared_ptr<CommandGroup>> _awaiting_groups;
+        std::vector<std::shared_ptr<CommandGroup>> _ready_groups;
         int _count_of_requests_waiting_response_from_upstream_server;
         Buffer _buffer;
         BufferSet _downstream_outgoing_buffers;
@@ -46,7 +46,7 @@ namespace cerb {
         void handle_response();
         void add_peer(Server* svr);
         void reactivate(util::weak_pointer<Command> cmd);
-        void push_command(util::unique_pointer<CommandGroup> g);
+        void push_command(std::shared_ptr<CommandGroup> g);
     };
 
 }

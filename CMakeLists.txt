@@ -2,7 +2,11 @@ cmake_minimum_required(VERSION 3.3)
 project(redis_cerberus)
 
 include_directories(".")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -ggdb3 -std=c++11 -Wall -Wextra -Wold-style-cast -Werror -DSEQ_COMMAND")
+
+#if(MODE STREQUAL "debug")
+#    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb3 -DELPP_DISABLE_DEBUG_LOGS -DELPP_NO_DEFAULT_LOG_FILE")
+#endif()
 
 set(SOURCE_FILES
     backtracpp/demangle.cpp
