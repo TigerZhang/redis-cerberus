@@ -14,6 +14,8 @@ namespace cerb {
 
     class Proxy;
     class Server;
+    class Client;
+    class DataCommand;
 
     class SlotsMapUpdater
         : public Connection
@@ -150,12 +152,12 @@ namespace cerb {
             return _last_remote_cost;
         }
 
-        Server* random_addr()
+        ServerPtr random_addr()
         {
             return _server_map.random_addr();
         }
 
-        Server* get_server_by_slot(slot key_slot);
+        ServerPtr get_server_by_slot(slot key_slot);
         void notify_slot_map_updated(std::vector<RedisNode> const& nodes,
                                      std::set<util::Address> const& remotes,
                                      msize_t covered_slots);
@@ -173,9 +175,9 @@ namespace cerb {
         void poll_rw(Connection* conn);
         void poll_del(Connection* conn);
 
-        Server *get_db();
+        ServerPtr get_db();
 
-        Server *get_cache();
+        ServerPtr get_cache();
     };
 
 }

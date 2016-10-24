@@ -300,6 +300,15 @@ void Proxy::handle_events(poll::pevent events[], int nfds)
             LOG(ERROR) << "IOError: " << e.what() << " :: " << "Close " << conn->str();
             conn->on_error();
             closed_conns.insert(conn);
+//
+//            if (conn == _server_map.get_by_slot(0)) {
+//                _server_map.set_by_slot(0, nullptr);
+//            }
+//            if (conn == _server_map.get_by_slot(1)) {
+//                _server_map.set_by_slot(1, nullptr);
+//            }
+//
+//            delete conn;
         }
     }
     LOG(DEBUG) << "*poll clean";
@@ -334,20 +343,20 @@ void Proxy::handle_events(poll::pevent events[], int nfds)
     LOG(DEBUG) << "*poll done";
 }
 
-Server* Proxy::get_server_by_slot(slot key_slot)
+ServerPtr Proxy::get_server_by_slot(slot key_slot)
 {
 //    Server* s = _server_map.get_by_slot(key_slot);
     key_slot = key_slot;
-    Server *s = _server_map.get_by_slot(0);
+    ServerPtr s = _server_map.get_by_slot(0);
     return (s == nullptr || s->closed()) ? nullptr : s;
 }
 
-Server* Proxy::get_db()
+ServerPtr Proxy::get_db()
 {
     return _server_map.get_by_slot(1);
 }
 
-Server* Proxy::get_cache()
+ServerPtr Proxy::get_cache()
 {
     return _server_map.get_by_slot(0);
 }

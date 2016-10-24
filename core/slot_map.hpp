@@ -6,11 +6,14 @@
 
 #include "common.hpp"
 #include "utils/address.hpp"
+//#include "server.hpp"
 
 namespace cerb {
 
     class Server;
     class Proxy;
+
+    typedef Server* ServerPtr;
 
     struct RedisNode {
         util::Address addr;
@@ -50,44 +53,44 @@ namespace cerb {
     };
 
     class SlotMap {
-        Server* _servers[CLUSTER_SLOT_COUNT];
+        ServerPtr _servers[CLUSTER_SLOT_COUNT];
     public:
         SlotMap();
         SlotMap(SlotMap const&) = delete;
 
-        Server** begin()
+        ServerPtr* begin()
         {
             return _servers;
         }
 
-        Server** end()
+        ServerPtr* end()
         {
             return _servers + CLUSTER_SLOT_COUNT;
         }
 
-        Server* const* begin() const
+        ServerPtr const* begin() const
         {
             return _servers;
         }
 
-        Server* const* end() const
+        ServerPtr const* end() const
         {
             return _servers + CLUSTER_SLOT_COUNT;
         }
 
-        Server* get_by_slot(slot s)
+        ServerPtr get_by_slot(slot s)
         {
             return _servers[s];
         }
 
-        void set_by_slot(slot s, Server *server)
+        void set_by_slot(slot s, ServerPtr server)
         {
             _servers[s] = server;
         }
 
         void replace_map(std::vector<RedisNode> const& nodes, Proxy* proxy);
         void clear();
-        Server* random_addr() const;
+        ServerPtr random_addr() const;
 
         static void select_slave_if_possible(std::string host_beginning);
     };

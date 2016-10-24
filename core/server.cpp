@@ -39,9 +39,9 @@ void Server::on_events(int events)
 void Server::_handle_request(int events)
 {
     auto now = Clock::now();
-    for (util::weak_pointer<DataCommand> c: this->_incoming_commands) {
+    for (auto c: this->_incoming_commands) {
         this->_sent_commands.push_back(c);
-        this->_upstream_outgoing_buffers.append(c->buffer);
+        this->_upstream_outgoing_buffers.append(c->command_buffer);
         c->sent_time = now;
     }
     this->_incoming_commands.clear();
@@ -61,8 +61,11 @@ void Server::_read_response()
     int n = this->_buffer.read(this->fd);
     if (n == 0) {
         throw ConnectionHungUp();
+        // FIXME: property handling read error
+        assert(false);
     }
     LOG(DEBUG) << "Read " << this->str() << " buffer size " << this->_buffer.size();
+    LOG(DEBUG) << "Read from " << this->str() << ": " << this->_buffer.to_string();
     auto responses(split_server_response(this->_buffer));
     if (responses.size() > this->_sent_commands.size()) {
         LOG(ERROR) << "+Error on split, expected size: " << this->_sent_commands.size()
@@ -185,13 +188,13 @@ std::vector<util::weak_pointer<DataCommand>> Server::deliver_commands()
 }
 
 // TODO: using smart pointer
-static thread_local std::map<util::Address, Server*> servers_map;
-static thread_local std::vector<Server*> servers_pool;
+static thread_local std::map<util::Address, ServerPtr> servers_map;
+static thread_local std::vector<ServerPtr> servers_pool;
 
-static void remove_entry(Server* server)
+static void remove_entry(util::Address addr)
 {
-    ::servers_map.erase(server->addr);
-    ::servers_pool.push_back(server);
+    ::servers_pool.push_back(servers_map[addr]);
+    ::servers_map.erase(addr);
 }
 
 void Server::after_events(std::set<Connection*>&)
@@ -233,16 +236,16 @@ void Server::close_conn()
         }
         this->attached_long_connections.clear();
 
-        ::remove_entry(this);
+        ::remove_entry(this->addr);
     }
 }
 
-std::map<util::Address, Server*>::iterator Server::addr_begin()
+std::map<util::Address, ServerPtr>::iterator Server::addr_begin()
 {
     return ::servers_map.begin();
 }
 
-std::map<util::Address, Server*>::iterator Server::addr_end()
+std::map<util::Address, ServerPtr>::iterator Server::addr_end()
 {
     return ::servers_map.end();
 }
@@ -263,7 +266,7 @@ void Server::_reconnect(util::Address const& addr, Proxy* p)
     ::on_server_connected(this->fd, this->_sent_commands);
 }
 
-Server* Server::_alloc_server(util::Address const& addr, Proxy* p)
+ServerPtr Server::_alloc_server(util::Address const& addr, Proxy* p)
 {
     if (servers_pool.empty()) {
         for (int i = 0; i < 8; ++i) {
@@ -271,7 +274,7 @@ Server* Server::_alloc_server(util::Address const& addr, Proxy* p)
             LOG(DEBUG) << "Allocate Server: " << servers_pool.back();
         }
     }
-    Server* s = servers_pool.back();
+    ServerPtr s = servers_pool.back();
     try {
         s->_reconnect(addr, p);
     } catch (IOErrorBase& e) {
@@ -282,11 +285,11 @@ Server* Server::_alloc_server(util::Address const& addr, Proxy* p)
     return s;
 }
 
-Server* Server::get_server(util::Address addr, Proxy* p)
+ServerPtr Server::get_server(util::Address addr, Proxy* p)
 {
     auto i = servers_map.find(addr);
     if (i == servers_map.end() || i->second->closed()) {
-        Server* s = Server::_alloc_server(addr, p);
+        ServerPtr s = Server::_alloc_server(addr, p);
         servers_map.insert(std::make_pair(std::move(addr), s));
         return s;
     }

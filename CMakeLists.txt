@@ -2,7 +2,17 @@ cmake_minimum_required(VERSION 3.3)
 project(redis_cerberus)
 
 include_directories(".")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -ggdb3 -std=c++11 -Wall -Wextra -Wold-style-cast -Werror -DSEQ_COMMAND")
+
+set(CMAKE_CXX_FLAGS "-std=c++11 -Wall -Wextra -Wold-style-cast -Werror -DSEQ_COMMAND")
+message("CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}" )
+if(CMAKE_BUILD_TYPE MATCHES "DEBUG")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -ggdb3")
+#    add_subdirectory(examples)
+#    enable_testing()
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -DELPP_DISABLE_DEBUG_LOGS -DELPP_NO_DEFAULT_LOG_FILE")
+endif(CMAKE_BUILD_TYPE MATCHES "DEBUG")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -ggdb3 -std=c++11 -Wall -Wextra -Wold-style-cast -Werror -DSEQ_COMMAND")
 
 #if(MODE STREQUAL "debug")
 #    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb3 -DELPP_DISABLE_DEBUG_LOGS -DELPP_NO_DEFAULT_LOG_FILE")
@@ -69,7 +79,7 @@ set(SOURCE_FILES
     utils/string.h
     utils/typetraits.hpp
     common.hpp
-    main.cpp)
+    main.cpp core/SetSequenceCommandGroup.cc core/SetSequenceCommandGroup.h)
 
 find_package(Threads REQUIRED)
 add_executable(redis_cerberus ${SOURCE_FILES})

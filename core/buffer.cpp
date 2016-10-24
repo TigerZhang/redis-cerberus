@@ -98,6 +98,17 @@ bool Buffer::same_as_string(std::string const& s) const
                                                     });
 }
 
+bool Buffer::same_as_string_upper_case(std::string const &s) const {
+    if (size() != s.size()) {
+        return false;
+    }
+    std::string::size_type i = 0;
+    return cend() == std::find_if(cbegin(), cend(), [&](byte b)
+    {
+        return toupper(b) != toupper(s[i++]);
+    });
+}
+
 static int write_single(int fd, byte const* buf, int buf_len, int* offset)
 {
     while (*offset < buf_len) {
@@ -107,6 +118,7 @@ static int write_single(int fd, byte const* buf, int buf_len, int* offset)
             return 0;
         }
         LOG(DEBUG) << "Write to " << fd << " : " << nwritten << " bytes written";
+        LOG(DEBUG) << "Write to " << fd << " : " << std::string(reinterpret_cast<const char*>(buf + *offset), buf_len);
         *offset += nwritten;
     }
     return 1;

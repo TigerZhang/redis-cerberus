@@ -17,10 +17,12 @@ namespace cerb {
     class Server;
     class Client;
     class CommandGroup;
+    class Response;
 
     class Command {
     public:
         typedef enum { UNKOWN_COMMAND, DUMP_COMMAND, RESTORE_COMMAND } CommandType;
+        std::shared_ptr<Buffer> command_buffer;
         std::shared_ptr<Buffer> buffer;
         util::weak_pointer<CommandGroup> const group;
         std::pair<Buffer::iterator, Buffer::iterator> command_name_pos;
@@ -34,31 +36,31 @@ namespace cerb {
         void responsed();
 
         Command(Buffer b, util::weak_pointer<CommandGroup> g)
-            : buffer(new Buffer(std::move(b)))
+            : command_buffer(new Buffer(std::move(b)))
             , group(g)
         , handle_response(nullptr)
         {}
 
         Command(Buffer b, std::shared_ptr<CommandGroup> g)
-                : buffer(new Buffer(std::move(b)))
+                : command_buffer(new Buffer(std::move(b)))
                 , group(g)
                 , handle_response(nullptr)
         {}
 
         Command(std::shared_ptr<Buffer> b, std::shared_ptr<CommandGroup> g)
-                : buffer(b)
+                : command_buffer(b)
                 , group(g)
                 , handle_response(nullptr)
         {}
 
         Command(std::shared_ptr<Buffer> b, util::weak_pointer<CommandGroup> g)
-                : buffer(b)
+                : command_buffer(b)
                 , group(g)
                 , handle_response(nullptr)
         {}
 
         explicit Command(std::shared_ptr<CommandGroup> g)
-            : buffer(new Buffer)
+            : command_buffer(new Buffer)
             , group(g)
         , handle_response(nullptr)
         {}
@@ -115,7 +117,7 @@ namespace cerb {
         Server* origin_server; // FIXME: should be shared_ptr?
 
         Command::CommandType commandType;
-        std::shared_ptr<std::string> key;
+        std::shared_ptr<Buffer> key;
     };
 
     class CommandGroup {
@@ -237,7 +239,7 @@ That's why CommnadGroup.
     public:
         explicit GetSequenceCommandGroup(util::weak_pointer<Client> cli,
                                          std::shared_ptr<Buffer> buffer,
-        std::shared_ptr<std::string> key);
+        std::shared_ptr<Buffer> key);
         virtual ~GetSequenceCommandGroup() {}
 
         void init_command_sequence();
@@ -253,15 +255,15 @@ That's why CommnadGroup.
 
         ResponseHandler _handle_response_of_read_from_cache_take_two;
 
-        std::shared_ptr<DataCommand> make_dump_command(std::shared_ptr<std::string> key);
+        std::shared_ptr<DataCommand> make_dump_command(std::shared_ptr<Buffer> key);
 
-        std::shared_ptr<DataCommand> make_restore_command(std::shared_ptr<std::string> key,
+        std::shared_ptr<DataCommand> make_restore_command(std::shared_ptr<Buffer> key,
                                                           std::shared_ptr<Buffer> dump_response);
 
         bool should_send_to_upstream_server_and_wait_response() const { return true; }
         bool is_sequence_group() const { return true; }
 
-        std::shared_ptr<std::string> key;
+        std::shared_ptr<Buffer> key;
         std::shared_ptr<Buffer> buffer;
     };
 

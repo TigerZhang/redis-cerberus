@@ -105,6 +105,8 @@ namespace cerb {
         void append_from(const_iterator first, const_iterator last);
         std::string to_string() const;
         bool same_as_string(std::string const& s) const;
+
+        bool same_as_string_upper_case(const std::string &s) const;
     };
 
     class BufferSet {

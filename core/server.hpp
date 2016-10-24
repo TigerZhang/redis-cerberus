@@ -16,6 +16,10 @@ namespace cerb {
     class Client;
     class DataCommand;
     class SingleCommandGroup;
+    class Server;
+
+//    typedef std::shared_ptr<Server> ServerPtr;
+    typedef Server* ServerPtr;
 
     class Server
         : public ProxyConnection
@@ -39,7 +43,7 @@ namespace cerb {
 
         ~Server() = default;
 
-        static Server* _alloc_server(util::Address const& addr, Proxy* p);
+        static ServerPtr _alloc_server(util::Address const& addr, Proxy* p);
     public:
         typedef enum{CACHE, DB} Type;
         Type type;
@@ -48,9 +52,9 @@ namespace cerb {
         std::set<ProxyConnection*> attached_long_connections;
 
         static void send_readonly_for_each_conn();
-        static Server* get_server(util::Address addr, Proxy* p);
-        static std::map<util::Address, Server*>::iterator addr_begin();
-        static std::map<util::Address, Server*>::iterator addr_end();
+        static ServerPtr get_server(util::Address addr, Proxy* p);
+        static std::map<util::Address, ServerPtr>::iterator addr_begin();
+        static std::map<util::Address, ServerPtr>::iterator addr_end();
 
         void on_events(int events);
         void after_events(std::set<Connection*>&);

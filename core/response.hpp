@@ -5,6 +5,7 @@
 
 #include "utils/pointer.h"
 #include "buffer.hpp"
+#include "proxy.hpp"
 
 namespace cerb {
 

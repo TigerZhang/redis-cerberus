@@ -15,6 +15,8 @@
 #include "utils/random.hpp"
 #include "utils/string.h"
 
+#include "SetSequenceCommandGroup.h"
+
 using namespace cerb;
 
 namespace {
@@ -22,9 +24,9 @@ namespace {
     std::string const RSP_OK_STR("+OK\r\n");
     std::shared_ptr<Buffer> const RSP_OK(new Buffer(RSP_OK_STR));
 
-    Server* select_server_for(Proxy* proxy, DataCommand* cmd, slot key_slot)
+    ServerPtr select_server_for(Proxy* proxy, DataCommand* cmd, slot key_slot)
     {
-        Server* svr = proxy->get_server_by_slot(key_slot);
+        ServerPtr svr = proxy->get_server_by_slot(key_slot);
         if (svr == nullptr) {
             LOG(DEBUG) << "Cluster slot not covered " << key_slot;
             proxy->retry_move_ask_command_later(util::make_weak_pointer(*cmd));
@@ -585,8 +587,8 @@ namespace {
                 , old_key_slot(old_key_slot)
                 , new_key_slot(new_key_slot)
             {
-                this->buffer->swap(Buffer("*2\r\n$3\r\nGET\r\n"));
-                this->buffer->append_from(this->old_key.begin(), this->old_key.end());
+                this->command_buffer->swap(Buffer("*2\r\n$3\r\nGET\r\n"));
+                this->command_buffer->append_from(this->old_key.begin(), this->old_key.end());
             }
 
             void rsp_get(Buffer rsp, bool error)
@@ -599,9 +601,9 @@ namespace {
                     this->buffer->swap(Buffer("-ERR no such key\r\n"));
                     return this->responsed();
                 }
-                this->buffer->swap(Buffer("*3\r\n$3\r\nSET\r\n"));
-                this->buffer->append_from(new_key.begin(), new_key.end());
-                this->buffer->append_from(rsp.begin(), rsp.end());
+                this->command_buffer->swap(Buffer("*3\r\n$3\r\nSET\r\n"));
+                this->command_buffer->append_from(new_key.begin(), new_key.end());
+                this->command_buffer->append_from(rsp.begin(), rsp.end());
                 this->current_key_slot = new_key_slot;
                 this->on_rsp =
                     [this](Buffer rsp, bool error)
@@ -617,8 +619,8 @@ namespace {
 
             void rsp_set()
             {
-                this->buffer->swap(Buffer("*2\r\n$3\r\nDEL\r\n"));
-                this->buffer->append_from(old_key.begin(), old_key.end());
+                this->command_buffer->swap(Buffer("*2\r\n$3\r\nDEL\r\n"));
+                this->command_buffer->append_from(old_key.begin(), old_key.end());
                 this->current_key_slot = old_key_slot;
                 this->on_rsp =
                     [this](Buffer, bool)
@@ -696,7 +698,7 @@ namespace {
 
             void deliver_client(Proxy* p)
             {
-                Server* s = p->random_addr();
+                ServerPtr s = p->random_addr();
                 if (s == nullptr) {
                     return this->client->close();
                 }
@@ -747,7 +749,7 @@ namespace {
 
             void deliver_client(Proxy* p)
             {
-                Server* s = p->get_server_by_slot(this->key_slot);
+                ServerPtr s = p->get_server_by_slot(this->key_slot);
                 if (s == nullptr) {
                     return this->client->close();
                 }
@@ -971,7 +973,7 @@ namespace {
         {
             s.command_key_pos.first = begin;
             s.command_key_pos.second = end;
-            s.key = std::move(std::make_shared<std::string>(begin, end));
+            s.key = std::move(std::make_shared<Buffer>(begin, end));
             s.last_command_is_bad = false;
             s._on_str = ClientCommandSplitter::on_string_nop;
             std::for_each(begin, end, [&](byte b) { s.slot_calc.next_byte(b); });
@@ -989,7 +991,7 @@ namespace {
         util::weak_pointer<Client> client;
         std::pair<Iterator, Iterator> command_name_pos;
         std::pair<Iterator, Iterator> command_key_pos;
-        std::shared_ptr<std::string> key;
+        std::shared_ptr<Buffer> key;
 
         void on_string(Iterator begin, Iterator end)
         {
@@ -1052,14 +1054,27 @@ namespace {
             } else if (this->special_parser == nullptr) {
                 std::unique_ptr<Buffer> buffer(new Buffer(this->last_command_begin, i));
                 LOG(DEBUG) << "on_split_point " << buffer->to_string();
-                LOG(DEBUG) << "on_split_point key " << this->key.get()->data();
+                LOG(DEBUG) << "on_split_point key " << this->key->to_string();
 #ifdef SEQ_COMMAND
-                std::shared_ptr<GetSequenceCommandGroup> command_group
-                        = std::make_shared<GetSequenceCommandGroup>(
-                                client, std::make_shared<Buffer>(this->last_command_begin, i),
-                                this->key);
-                command_group->_origin_command->command_name_pos = command_name_pos;
-                command_group->_origin_command->command_key_pos = command_key_pos;
+                Buffer command_name(command_name_pos.first, command_name_pos.second);
+                std::shared_ptr<SequenceCommandGroup> command_group;
+                if (command_name.same_as_string_upper_case("GET")) {
+                    command_group = std::make_shared<GetSequenceCommandGroup>(
+                            client, std::make_shared<Buffer>(this->last_command_begin, i),
+                            this->key);
+                    command_group->_origin_command->command_name_pos = command_name_pos;
+                    command_group->_origin_command->command_key_pos = command_key_pos;
+                } else if (command_name.same_as_string_upper_case("SET")) {
+                    command_group = std::make_shared<SetSequenceCommandGroup>(
+                            client, std::make_shared<Buffer>(this->last_command_begin, i),
+                            this->key
+                    );
+                    command_group->_origin_command->command_name_pos = command_name_pos;
+                    command_group->_origin_command->command_key_pos = command_key_pos;
+                } else {
+                    LOG(ERROR) << "no command group defined for command: " << command_name.to_string();
+                    assert(false);
+                }
 #else
                 auto command_group = std::make_shared<SingleCommandGroup(
                         client, Buffer(this->last_command_begin, i), this->slot_calc.get_slot()));
@@ -1229,6 +1244,9 @@ namespace cerb {
             : CommandGroup(cli)
     , _origin_command(std::make_shared<OneSlotCommand>(buffer, util::weak_pointer<CommandGroup>(this), 0))
     {
+        _cache = client->get_proxy()->get_cache();
+        _db = client->get_proxy()->get_db();
+
         _proxy = cli->get_proxy();
     }
 
@@ -1289,13 +1307,10 @@ namespace cerb {
     GetSequenceCommandGroup::GetSequenceCommandGroup(
             util::weak_pointer<Client> cli,
             std::shared_ptr<Buffer> buffer,
-    std::shared_ptr<std::string> key)
+    std::shared_ptr<Buffer> key)
             : SequenceCommandGroup(cli, buffer)
             , key(std::move(key))
     {
-        _cache = client->get_proxy()->get_cache();
-        _db = client->get_proxy()->get_db();
-
         // Init command sequence
         init_command_sequence();
 //        _next_command = _commands.begin();
@@ -1308,8 +1323,8 @@ namespace cerb {
 //                        _origin_command->command_key_pos.second);
 //        std::shared_ptr<std::string> key = key;
 
-        LOG(DEBUG) << "GetSequenceCommandGroup::init_command_sequence _origin_command " << _origin_command->buffer->to_string();
-        LOG(DEBUG) << "GetSequenceCommandGroup::init_command_sequence [" << *key << "]";
+        LOG(DEBUG) << "GetSequenceCommandGroup::init_command_sequence _origin_command " << _origin_command->command_buffer->to_string();
+        LOG(DEBUG) << "GetSequenceCommandGroup::init_command_sequence [" << key->to_string() << "]";
         /*
          Send GET command
          handler = get_command_take_one_handle_response
@@ -1350,7 +1365,7 @@ namespace cerb {
                                           std::shared_ptr<Buffer> ) {
             return this->_origin_command; };
         GetCommand->target_server = _cache;
-        GetCommand->response_handler = _handle_response_of_get_command;
+//        GetCommand->response_handler = _handle_response_of_get_command;
         GetCommand->next_state_machine[CommandStateMachine::SUCC] = ReturnResult;
         GetCommand->next_state_machine[CommandStateMachine::NOT_FOUND] = DumpCommand;
         GetCommand->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
@@ -1360,7 +1375,7 @@ namespace cerb {
                                                 std::shared_ptr<Buffer> ) {
             return this->make_dump_command(this->key); };
         DumpCommand->target_server = _db;
-        DumpCommand->response_handler = _handle_response_of_dump_from_db;
+//        DumpCommand->response_handler = _handle_response_of_dump_from_db;
         DumpCommand->next_state_machine[CommandStateMachine::SUCC] = RestoreCommand;
         DumpCommand->next_state_machine[CommandStateMachine::NOT_FOUND] = ReturnResult;
         DumpCommand->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
@@ -1371,7 +1386,7 @@ namespace cerb {
             return this->make_restore_command(this->key, previous_response);
         };
         RestoreCommand->target_server = _cache;
-        RestoreCommand->response_handler = _handle_response_of_restore_to_cache;
+//        RestoreCommand->response_handler = _handle_response_of_restore_to_cache;
         RestoreCommand->next_state_machine[CommandStateMachine::SUCC] = GetCommand2;
         RestoreCommand->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
 
@@ -1380,7 +1395,7 @@ namespace cerb {
                                            std::shared_ptr<Buffer> ) {
             return this->_origin_command; };
         GetCommand2->target_server = _db;
-        GetCommand2->response_handler = _handle_response_of_get_command;
+//        GetCommand2->response_handler = _handle_response_of_get_command;
         GetCommand2->next_state_machine[CommandStateMachine::SUCC] = ReturnResult;
         GetCommand2->next_state_machine[CommandStateMachine::NOT_FOUND] = ReturnResult;
         GetCommand2->next_state_machine[CommandStateMachine::FAIL] = ReturnFail;
@@ -1434,26 +1449,30 @@ namespace cerb {
     }
 
     std::shared_ptr<DataCommand>
-    GetSequenceCommandGroup::make_dump_command(std::shared_ptr<std::string> key) {
+    GetSequenceCommandGroup::make_dump_command(std::shared_ptr<Buffer> key) {
         const std::string DUMP_CMD = "*2\r\n$4\r\nDUMP\r\n${}\r\n{}\r\n";
-        std::shared_ptr<Buffer> buffer = std::make_shared<Buffer>(fmt::format(DUMP_CMD, key->size(), *key));
-        return std::make_shared<OneSlotCommand>(buffer, util::make_weak_pointer<CommandGroup>(*this), 0);
+        std::shared_ptr<Buffer> buffer = std::make_shared<Buffer>(
+                fmt::format(DUMP_CMD, key->size(), key->to_string().c_str()));
+        return std::make_shared<OneSlotCommand>(
+                buffer,
+                util::make_weak_pointer<CommandGroup>(*this),
+                0);
     }
 
     std::shared_ptr<DataCommand>
     GetSequenceCommandGroup::make_restore_command(
-            std::shared_ptr<std::string> key,
+            std::shared_ptr<Buffer> key,
             std::shared_ptr<Buffer> dump_response) {
-        const std::string RESTORE_CMD = "*4\r\n"
+        const std::string RESTORE_CMD_WITHOUT_DUMP = "*4\r\n"
                 "$7\r\nRESTORE\r\n"
                 "${}\r\n{}\r\n"
-                "$1\r\n0\r\n"
-                "{}";
+                "$1\r\n0\r\n";
 
-        return std::make_shared<OneSlotCommand>(
-                Buffer(fmt::format(RESTORE_CMD,
-                                   key->size(), key,
-                                   dump_response->to_string())),
+        std::shared_ptr<Buffer> buffer = std::make_shared<Buffer>(fmt::format(RESTORE_CMD_WITHOUT_DUMP,
+                           key->size(), key->to_string().c_str()));
+        buffer->append_from(dump_response->begin(), dump_response->end());
+
+        return std::make_shared<OneSlotCommand>(buffer,
                 util::weak_pointer<CommandGroup>(this), 0);
     }
 }
